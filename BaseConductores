@@ -1,0 +1,906 @@
+program ConductorDB;
+
+{ ============================================================================
+  Base de datos de conductores eléctricos (Free Pascal compatible)
+  Adaptado para Free Pascal - elimina dependencias no compatibles
+  Autor: Adaptado por IA para Free Pascal
+  Fecha: 2025-09-24
+
+  Notas:
+    - Usa solo Crt y Dos.
+    - ScreenWidth reemplazado por Lo(WindMax)+1.
+    - GetTickCount simulado con GetTime.
+    - Funciones de formato reemplazadas manualmente.
+============================================================================ }
+
+uses
+  Crt, Dos;
+
+{ -------------------------
+  Tipos y constantes
+  ------------------------- }
+const
+  DBFileName = 'CONDUCTS.DAT';
+  ReportFileName = 'CONDUCTORS_REPORT.pdf';
+  MaxNameLen = 50;
+
+type
+  TMaterial = (matUnknown, matAluminum, matCopper, matSteel, matACSR);
+  
+  TConductor = record
+    ID: LongInt;
+    Name: string[MaxNameLen];
+    Material: TMaterial;
+    NumWires: Integer;
+    Diameter_mm: Real;
+    RadiusGeom_m: Real;
+    Resistance_ohm_per_km: Real;
+    Impedance_ohm_per_km: Real;
+    Capacitance_nf_per_km: Real;
+    Inductance_h_per_km: Real;
+    TempRated_C: Real;
+    TempMax_C: Real;
+    LinearMass_kg_per_km: Real;
+    Notes: string[200];
+  end;
+
+  TConductorFile = file of TConductor;
+
+{ -------------------------
+  Variables globales
+  ------------------------- }
+var
+  DB: TConductorFile;
+  CurrentCount: LongInt;
+
+{ -------------------------
+  Funciones auxiliares compatibles
+  ------------------------- }
+
+function ScreenWidth: Integer;
+begin
+  ScreenWidth := Lo(WindMax) + 1;
+end;
+
+function ScreenHeight: Integer;
+begin
+  ScreenHeight := Hi(WindMax) + 1;
+end;
+
+function MaterialToStr(m: TMaterial): string;
+begin
+  case m of
+    matAluminum: MaterialToStr := 'Aluminio';
+    matCopper:   MaterialToStr := 'Cobre';
+    matSteel:    MaterialToStr := 'Acero';
+    matACSR:     MaterialToStr := 'ACSR';
+  else
+    MaterialToStr := 'Desconocido';
+  end;
+end;
+
+function StrToMaterial(const s: string): TMaterial;
+var
+  t: string;
+  i: Integer;
+begin
+  t := s;
+  for i := 1 to Length(t) do
+    if t[i] in ['A'..'Z'] then
+      t[i] := Chr(Ord(t[i]) + 32); { toLowerCase manual }
+  if t = 'aluminio' then StrToMaterial := matAluminum
+  else if t = 'cobre' then StrToMaterial := matCopper
+  else if t = 'acero' then StrToMaterial := matSteel
+  else if (t = 'acsr') or (t = 'a.c.s.r') then StrToMaterial := matACSR
+  else StrToMaterial := matUnknown;
+end;
+
+function PadRight(const s: string; width: Integer): string;
+var
+  i, l: Integer;
+  res: string;
+begin
+  l := Length(s);
+  if l >= width then
+    PadRight := s
+  else
+  begin
+    res := s;
+    for i := l + 1 to width do
+      res := res + ' ';
+    PadRight := res;
+  end;
+end;
+
+function IntToStr(n: LongInt): string;
+var
+  s: string;
+begin
+  Str(n, s);
+  IntToStr := s;
+end;
+
+function RealToStr(r: Real; decimals: Integer): string;
+var
+  s: string;
+begin
+  if decimals = 0 then
+    Str(r:0:0, s)
+  else if decimals = 2 then
+    Str(r:0:2, s)
+  else if decimals = 3 then
+    Str(r:0:3, s)
+  else if decimals = 4 then
+    Str(r:0:4, s)
+  else if decimals = 6 then
+    Str(r:0:6, s)
+  else
+    Str(r, s);
+  RealToStr := s;
+end;
+
+function StringOfChar(ch: Char; count: Integer): string;
+var
+  s: string;
+  i: Integer;
+begin
+  s := '';
+  for i := 1 to count do s := s + ch;
+  StringOfChar := s;
+end;
+
+function GetTickCount: LongInt;
+var
+  h, m, s, s100: Word;
+begin
+  GetTime(h, m, s, s100);
+  GetTickCount := (h * 3600 + m * 60 + s) * 100 + s100;
+end;
+
+function Trim(const s: string): string;
+var
+  i, start, stop: Integer;
+begin
+  start := 1;
+  while (start <= Length(s)) and (s[start] = ' ') do Inc(start);
+  stop := Length(s);
+  while (stop >= start) and (s[stop] = ' ') do Dec(stop);
+  if start > stop then
+    Trim := ''
+  else
+    Trim := Copy(s, start, stop - start + 1);
+end;
+
+procedure DrawHeader(const Title: string);
+var
+  i, len, posX: Integer;
+  ch: Char;
+begin
+  ClrScr;
+  TextBackground(Blue);
+  TextColor(White);
+  for i := 1 to ScreenWidth do Write(' ');
+  GotoXY(1,1);
+  WriteLn;
+  TextBackground(Black);
+  TextColor(Yellow);
+  len := Length(Title);
+  posX := (ScreenWidth - len) div 2;
+  if posX < 1 then posX := 1;
+  GotoXY(posX, 2);
+  for i := 1 to len do
+    begin
+      ch := Title[i];
+      Write(ch);
+      Delay(15);
+    end;
+  WriteLn;
+  TextColor(LightGray);
+  WriteLn('  Base de datos de conductores eléctricos - Menú principal');
+  WriteLn('  (Usa teclas indicadas o números para seleccionar opciones)');
+  WriteLn;
+end;
+
+procedure ShowSplash;
+var
+  i: Integer;
+  posX: Integer;
+begin
+  ClrScr;
+  TextColor(Cyan);
+  posX := (ScreenWidth - 20) div 2;
+  if posX < 1 then posX := 1;
+  GotoXY(posX, 6);
+  Write('SISTEMA DE CONDUCTORES');
+  posX := (ScreenWidth - 36) div 2;
+  if posX < 1 then posX := 1;
+  GotoXY(posX, 8);
+  Write('Cargando base de datos y módulos  [', ']');
+  for i := 1 to 30 do
+    begin
+      GotoXY(posX + 28 + i div 3, 8);
+      Write(#178);
+      Delay(30);
+    end;
+  Delay(200);
+  ClrScr;
+end;
+
+procedure WaitKey;
+begin
+  WriteLn;
+  Write('Presione una tecla para continuar...');
+  ReadKey;
+end;
+
+procedure InitDB;
+var
+  c: TConductor;
+begin
+  Assign(DB, DBFileName);
+  {$I-}
+  Reset(DB);
+  {$I+}
+  if IOResult <> 0 then
+    begin
+      Rewrite(DB);
+      CurrentCount := 0;
+      Close(DB);
+      Reset(DB);
+    end;
+  CurrentCount := 0;
+  Seek(DB, 0);
+  while not Eof(DB) do
+    begin
+      Read(DB, c);
+      Inc(CurrentCount);
+    end;
+  Seek(DB, 0);
+end;
+
+function GenerateID: LongInt;
+var
+  y, m, d, dow: Word;
+begin
+  GetDate(y, m, d, dow);
+  GenerateID := (GetTickCount mod 100000) + (CurrentCount * 7) + (d shl 8) + (m shl 16);
+end;
+
+procedure AddConductor;
+var
+  c: TConductor;
+  s: string;
+  r: Real;
+  i, err: Integer;
+begin
+  ClrScr;
+  DrawHeader('Agregar nuevo conductor');
+  TextColor(LightGreen);
+  WriteLn('Ingrese datos del conductor. Use punto (.) para decimales.');
+  WriteLn;
+  c.ID := GenerateID;
+  Write('Nombre (ej. Aluminio-ACSR-25mm): ');
+  ReadLn(c.Name);
+  Write('Material (Aluminio/Cobre/Acero/ACSR): ');
+  ReadLn(s);
+  c.Material := StrToMaterial(s);
+  Write('Número de hilos: ');
+  ReadLn(s);
+  Val(s, i, err);
+  if err = 0 then c.NumWires := i else c.NumWires := 0;
+  Write('Diámetro total (mm): ');
+  ReadLn(s);
+  Val(s, r, err);
+  if err = 0 then c.Diameter_mm := r else c.Diameter_mm := 0.0;
+  c.RadiusGeom_m := (c.Diameter_mm / 1000) / 2;
+  Write('Resistencia (Ohm/km): ');
+  ReadLn(s);
+  Val(s, r, err);
+  if err = 0 then c.Resistance_ohm_per_km := r else c.Resistance_ohm_per_km := 0.0;
+  Write('Impedancia (Ohm/km): ');
+  ReadLn(s);
+  Val(s, r, err);
+  if err = 0 then c.Impedance_ohm_per_km := r else c.Impedance_ohm_per_km := 0.0;
+  Write('Capacitancia (nF/km): ');
+  ReadLn(s);
+  Val(s, r, err);
+  if err = 0 then c.Capacitance_nf_per_km := r else c.Capacitance_nf_per_km := 0.0;
+  Write('Inductancia (H/km): ');
+  ReadLn(s);
+  Val(s, r, err);
+  if err = 0 then c.Inductance_h_per_km := r else c.Inductance_h_per_km := 0.0;
+  Write('Temperatura nominal (°C): ');
+  ReadLn(s);
+  Val(s, r, err);
+  if err = 0 then c.TempRated_C := r else c.TempRated_C := 0.0;
+  Write('Temperatura máxima (°C): ');
+  ReadLn(s);
+  Val(s, r, err);
+  if err = 0 then c.TempMax_C := r else c.TempMax_C := 0.0;
+  Write('Masa lineal (kg/km): ');
+  ReadLn(s);
+  Val(s, r, err);
+  if err = 0 then c.LinearMass_kg_per_km := r else c.LinearMass_kg_per_km := 0.0;
+  Write('Notas/observaciones: ');
+  ReadLn(c.Notes);
+
+  Seek(DB, FileSize(DB));
+  Write(DB, c);
+  Inc(CurrentCount);
+  TextColor(LightGreen);
+  WriteLn;
+  WriteLn('Conductor agregado con ID: ', c.ID);
+  WaitKey;
+end;
+
+procedure ListConductors;
+var
+  c: TConductor;
+  i, perPage, page, totalPages, idx: LongInt;
+  ch: Char;
+  idInput: string;
+  idToFind: LongInt;
+  found: Boolean;
+begin
+  ClrScr;
+  DrawHeader('Listado de conductores');
+  perPage := 8;
+  if CurrentCount = 0 then
+    begin
+      TextColor(Red);
+      WriteLn('No hay conductores registrados.');
+      WaitKey;
+      Exit;
+    end;
+
+  totalPages := (CurrentCount + perPage - 1) div perPage;
+  page := 1;
+  repeat
+    ClrScr;
+    DrawHeader('Listado de conductores (Página ' + IntToStr(page) + ' de ' + IntToStr(totalPages) + ')');
+    TextColor(White);
+    WriteLn(PadRight('ID', 10), PadRight('Nombre', 28), PadRight('Mat.', 8), ' R(Ohm/km)  Z(Ohm/km)');
+    WriteLn(StringOfChar('-', ScreenWidth));
+    Seek(DB, 0);
+    idx := 0;
+    while not Eof(DB) do
+      begin
+        Read(DB, c);
+        Inc(idx);
+        if ((idx > (page - 1) * perPage) and (idx <= page * perPage)) then
+          begin
+            WriteLn(
+              PadRight(IntToStr(c.ID), 10),
+              PadRight(c.Name, 28),
+              PadRight(MaterialToStr(c.Material), 8),
+              RealToStr(c.Resistance_ohm_per_km, 4):12,
+              RealToStr(c.Impedance_ohm_per_km, 4):12
+            );
+          end;
+      end;
+    TextColor(LightGray);
+    WriteLn;
+    Write('[N] Siguiente página  [P] Página anterior  [V] Ver detalle por ID  [Q] Salir a menú');
+    ch := UpCase(ReadKey);
+    case ch of
+      'N': if page < totalPages then Inc(page);
+      'P': if page > 1 then Dec(page);
+      'V': begin
+             WriteLn;
+             Write('Ingrese ID a ver detalle: ');
+             ReadLn(idInput);
+             Val(idInput, idToFind, i);
+             if i <> 0 then idToFind := -1;
+             Seek(DB, 0);
+             found := False;
+             while not Eof(DB) do
+               begin
+                 Read(DB, c);
+                 if c.ID = idToFind then
+                   begin
+                     ClrScr;
+                     DrawHeader('Detalle de conductor - ID: ' + IntToStr(c.ID));
+                     TextColor(LightCyan);
+                     WriteLn('Nombre: ', c.Name);
+                     WriteLn('Material: ', MaterialToStr(c.Material));
+                     WriteLn('Num hilos: ', c.NumWires);
+                     WriteLn('Diametro (mm): ', RealToStr(c.Diameter_mm, 3));
+                     WriteLn('Radio geométrico (m): ', RealToStr(c.RadiusGeom_m, 6));
+                     WriteLn('Resistencia (Ohm/km): ', RealToStr(c.Resistance_ohm_per_km, 6));
+                     WriteLn('Impedancia (Ohm/km): ', RealToStr(c.Impedance_ohm_per_km, 6));
+                     WriteLn('Capacitancia (nF/km): ', RealToStr(c.Capacitance_nf_per_km, 6));
+                     WriteLn('Inductancia (H/km): ', RealToStr(c.Inductance_h_per_km, 6));
+                     WriteLn('Temp nominal (°C): ', RealToStr(c.TempRated_C, 2));
+                     WriteLn('Temp max (°C): ', RealToStr(c.TempMax_C, 2));
+                     WriteLn('Masa lineal (kg/km): ', RealToStr(c.LinearMass_kg_per_km, 3));
+                     WriteLn('Notas: ', c.Notes);
+                     WaitKey;
+                     found := True;
+                     Break;
+                   end;
+               end;
+             if not found then
+               begin
+                 TextColor(Red);
+                 WriteLn('ID no encontrado.');
+                 WaitKey;
+               end;
+           end;
+      'Q': Break;
+    end;
+  until ch = 'Q';
+end;
+
+procedure EditConductor;
+var
+  idInput: string;
+  id: LongInt;
+  found: Boolean;
+  c: TConductor;
+  posi: LongInt;
+  inStr: string;
+  r: Real;
+  i, err: Integer;
+begin
+  ClrScr;
+  DrawHeader('Editar conductor');
+  if CurrentCount = 0 then
+    begin
+      WriteLn('No hay registros para editar.');
+      WaitKey;
+      Exit;
+    end;
+  Write('Ingrese ID del conductor a editar: ');
+  ReadLn(idInput);
+  Val(idInput, id, err);
+  if err <> 0 then
+    begin
+      TextColor(Red);
+      WriteLn('ID inválido.');
+      WaitKey;
+      Exit;
+    end;
+  found := False;
+  Seek(DB, 0);
+  posi := 0;
+  while not Eof(DB) do
+    begin
+      Read(DB, c);
+      if c.ID = id then
+        begin
+          found := True;
+          Break;
+        end;
+      Inc(posi);
+    end;
+  if not found then
+    begin
+      TextColor(Red);
+      WriteLn('ID no encontrado.');
+      WaitKey;
+      Exit;
+    end;
+
+  ClrScr;
+  DrawHeader('Editando ID: ' + IntToStr(c.ID));
+  TextColor(LightGreen);
+  WriteLn('Dejar vacío para mantener valor actual.');
+  Write('Nombre (', c.Name, '): ');
+  ReadLn(inStr);
+  if Trim(inStr) <> '' then c.Name := inStr;
+  Write('Material (', MaterialToStr(c.Material), '): ');
+  ReadLn(inStr);
+  if Trim(inStr) <> '' then c.Material := StrToMaterial(inStr);
+  Write('Número de hilos (', c.NumWires, '): ');
+  ReadLn(inStr);
+  if Trim(inStr) <> '' then
+    begin
+      Val(inStr, i, err);
+      if err = 0 then c.NumWires := i;
+    end;
+  Write('Diámetro mm (', RealToStr(c.Diameter_mm, 3), '): ');
+  ReadLn(inStr);
+  if Trim(inStr) <> '' then
+    begin
+      Val(inStr, r, err);
+      if err = 0 then
+        begin
+          c.Diameter_mm := r;
+          c.RadiusGeom_m := (c.Diameter_mm/1000)/2;
+        end;
+    end;
+  Write('Resistencia (Ohm/km) (', RealToStr(c.Resistance_ohm_per_km, 6), '): ');
+  ReadLn(inStr);
+  if Trim(inStr) <> '' then
+    begin
+      Val(inStr, r, err);
+      if err = 0 then c.Resistance_ohm_per_km := r;
+    end;
+  Write('Impedancia (Ohm/km) (', RealToStr(c.Impedance_ohm_per_km, 6), '): ');
+  ReadLn(inStr);
+  if Trim(inStr) <> '' then
+    begin
+      Val(inStr, r, err);
+      if err = 0 then c.Impedance_ohm_per_km := r;
+    end;
+  Write('Capacitancia nF/km (', RealToStr(c.Capacitance_nf_per_km, 6), '): ');
+  ReadLn(inStr);
+  if Trim(inStr) <> '' then
+    begin
+      Val(inStr, r, err);
+      if err = 0 then c.Capacitance_nf_per_km := r;
+    end;
+  Write('Inductancia H/km (', RealToStr(c.Inductance_h_per_km, 6), '): ');
+  ReadLn(inStr);
+  if Trim(inStr) <> '' then
+    begin
+      Val(inStr, r, err);
+      if err = 0 then c.Inductance_h_per_km := r;
+    end;
+  Write('Temp nominal °C (', RealToStr(c.TempRated_C, 2), '): ');
+  ReadLn(inStr);
+  if Trim(inStr) <> '' then
+    begin
+      Val(inStr, r, err);
+      if err = 0 then c.TempRated_C := r;
+    end;
+  Write('Temp max °C (', RealToStr(c.TempMax_C, 2), '): ');
+  ReadLn(inStr);
+  if Trim(inStr) <> '' then
+    begin
+      Val(inStr, r, err);
+      if err = 0 then c.TempMax_C := r;
+    end;
+  Write('Masa lineal kg/km (', RealToStr(c.LinearMass_kg_per_km, 3), '): ');
+  ReadLn(inStr);
+  if Trim(inStr) <> '' then
+    begin
+      Val(inStr, r, err);
+      if err = 0 then c.LinearMass_kg_per_km := r;
+    end;
+  Write('Notas (actual): ', c.Notes, #10, 'Nuevas notas (dejar vacío para mantener): ');
+  ReadLn(inStr);
+  if Trim(inStr) <> '' then c.Notes := inStr;
+
+  Seek(DB, posi);
+  Write(DB, c);
+  TextColor(LightGreen);
+  WriteLn('Registro actualizado.');
+  WaitKey;
+end;
+
+procedure DeleteConductor;
+var
+  idInput: string;
+  id: LongInt;
+  c: TConductor;
+  TempF: TConductorFile;
+  Found: Boolean;
+  err: Integer;
+begin
+  ClrScr;
+  DrawHeader('Eliminar conductor');
+  if CurrentCount = 0 then
+    begin
+      WriteLn('No hay registros para eliminar.');
+      WaitKey;
+      Exit;
+    end;
+  Write('Ingrese ID a eliminar: ');
+  ReadLn(idInput);
+  Val(idInput, id, err);
+  if err <> 0 then
+    begin
+      TextColor(Red);
+      WriteLn('ID inválido.');
+      WaitKey;
+      Exit;
+    end;
+  Assign(TempF, 'TMP_'+DBFileName);
+  Rewrite(TempF);
+  Seek(DB, 0);
+  Found := False;
+  while not Eof(DB) do
+    begin
+      Read(DB, c);
+      if c.ID = id then
+        begin
+          Found := True;
+          Continue;
+        end;
+      Write(TempF, c);
+    end;
+  Close(TempF);
+  Close(DB);
+  if not Found then
+    begin
+      TextColor(Red);
+      WriteLn('ID no encontrado. Operación cancelada.');
+      Reset(DB);
+      WaitKey;
+      Exit;
+    end;
+  Erase(DB);
+  Rename(TempF, DBFileName);
+  Reset(DB);
+  Dec(CurrentCount);
+  TextColor(LightGreen);
+  WriteLn('Registro eliminado correctamente.');
+  WaitKey;
+end;
+
+procedure SearchConductor;
+var
+  q: string;
+  c: TConductor;
+  found: Boolean;
+  i: Integer;
+  nameLow, matLow, qLow: string;
+begin
+  ClrScr;
+  DrawHeader('Buscar conductor');
+  WriteLn('Buscar por nombre o material. Ingrese cadena a buscar: ');
+  ReadLn(q);
+  { toLowerCase manual }
+  qLow := q;
+  for i := 1 to Length(qLow) do
+    if qLow[i] in ['A'..'Z'] then
+      qLow[i] := Chr(Ord(qLow[i]) + 32);
+  found := False;
+  Seek(DB, 0);
+  while not Eof(DB) do
+    begin
+      Read(DB, c);
+      nameLow := c.Name;
+      for i := 1 to Length(nameLow) do
+        if nameLow[i] in ['A'..'Z'] then
+          nameLow[i] := Chr(Ord(nameLow[i]) + 32);
+      matLow := MaterialToStr(c.Material);
+      for i := 1 to Length(matLow) do
+        if matLow[i] in ['A'..'Z'] then
+          matLow[i] := Chr(Ord(matLow[i]) + 32);
+      if (Pos(qLow, nameLow) > 0) or (Pos(qLow, matLow) > 0) then
+        begin
+          if not found then
+            begin
+              TextColor(LightGray);
+              WriteLn('Resultados:');
+              WriteLn(StringOfChar('-', ScreenWidth));
+            end;
+          TextColor(Cyan);
+          WriteLn('ID: ', c.ID, ' | ', c.Name, ' | ', MaterialToStr(c.Material), ' | R=', RealToStr(c.Resistance_ohm_per_km, 4), ' Ohm/km');
+          found := True;
+        end;
+    end;
+  if not found then
+    begin
+      TextColor(Red);
+      WriteLn('No se encontraron coincidencias.');
+    end;
+  WaitKey;
+end;
+
+procedure ExportReportToFile(const FileName: string);
+var
+  tf: Text;
+  c: TConductor;
+  y, mo, d, dow: Word;
+  h, mi, s, s100: Word;
+  dateStr, timeStr: string;
+begin
+  GetDate(y, mo, d, dow);
+  GetTime(h, mi, s, s100);
+  Str(y, dateStr); dateStr := dateStr + '-' + IntToStr(mo) + '-' + IntToStr(d);
+  Str(h, timeStr); timeStr := timeStr + ':' + IntToStr(mi) + ':' + IntToStr(s);
+
+  Assign(tf, FileName);
+  Rewrite(tf);
+  Writeln(tf, 'REPORTE DE CONDUCTORES - ', dateStr, ' ', timeStr);
+  Writeln(tf, StringOfChar('=', 80));
+  Seek(DB, 0);
+  while not Eof(DB) do
+    begin
+      Read(DB, c);
+      Writeln(tf, 'ID: ', c.ID);
+      Writeln(tf, 'Nombre: ', c.Name);
+      Writeln(tf, 'Material: ', MaterialToStr(c.Material));
+      Writeln(tf, 'Numero de hilos: ', c.NumWires);
+      Writeln(tf, 'Diametro (mm): ', RealToStr(c.Diameter_mm, 3), '  Radio geom (m): ', RealToStr(c.RadiusGeom_m, 6));
+      Writeln(tf, 'R: ', RealToStr(c.Resistance_ohm_per_km, 6), ' Ohm/km   Z: ', RealToStr(c.Impedance_ohm_per_km, 6), ' Ohm/km');
+      Writeln(tf, 'C: ', RealToStr(c.Capacitance_nf_per_km, 6), ' nF/km    L: ', RealToStr(c.Inductance_h_per_km, 6), ' H/km');
+      Writeln(tf, 'TempNom: ', RealToStr(c.TempRated_C, 2), ' C   TempMax: ', RealToStr(c.TempMax_C, 2), ' C');
+      Writeln(tf, 'Masa lineal: ', RealToStr(c.LinearMass_kg_per_km, 3), ' kg/km');
+      Writeln(tf, 'Notas: ', c.Notes);
+      Writeln(tf, StringOfChar('-', 60));
+    end;
+  Close(tf);
+  TextColor(LightGreen);
+  WriteLn('Reporte guardado en archivo: ', FileName);
+  WaitKey;
+end;
+
+procedure PrintReport;
+var
+  c: TConductor;
+  tempName: string;
+  tf: Text;
+  y, mo, d, dow: Word;
+  h, mi, s, s100: Word;
+  timeStr: string;
+begin
+  ClrScr;
+  DrawHeader('Impresion de reporte');
+  tempName := 'CONDUCTORS_REPORT.PRN';
+  Assign(tf, tempName);
+  Rewrite(tf);
+  GetDate(y, mo, d, dow);
+  GetTime(h, mi, s, s100);
+  Str(h, timeStr); timeStr := timeStr + ':' + IntToStr(mi) + ':' + IntToStr(s);
+  Writeln(tf, 'REPORTE DE CONDUCTORES - (archivo .prn) ');
+  Writeln(tf, 'Generado: ', y, '-', mo, '-', d, ' ', timeStr);
+  Writeln(tf, StringOfChar('=', 60));
+  Seek(DB, 0);
+  while not Eof(DB) do
+    begin
+      Read(DB, c);
+      Writeln(tf, 'ID: ', c.ID);
+      Writeln(tf, 'Nombre: ', c.Name);
+      Writeln(tf, 'Material: ', MaterialToStr(c.Material));
+      Writeln(tf, StringOfChar('-', 40));
+    end;
+  Close(tf);
+  TextColor(Yellow);
+  WriteLn('Se creó archivo para impresora: ', tempName);
+  WriteLn('Envíelo manualmente a su impresora si lo desea.');
+  WaitKey;
+end;
+
+procedure ImportSampleData;
+var
+  samples: array[1..4] of TConductor;
+  i: Integer;
+begin
+  samples[1].ID := GenerateID + 1;
+  samples[1].Name := 'ACSR - 25/7';
+  samples[1].Material := matACSR;
+  samples[1].NumWires := 7;
+  samples[1].Diameter_mm := 25.0;
+  samples[1].RadiusGeom_m := (25.0/1000)/2;
+  samples[1].Resistance_ohm_per_km := 0.321;
+  samples[1].Impedance_ohm_per_km := 0.405;
+  samples[1].Capacitance_nf_per_km := 9.5;
+  samples[1].Inductance_h_per_km := 0.00108;
+  samples[1].TempRated_C := 75;
+  samples[1].TempMax_C := 120;
+  samples[1].LinearMass_kg_per_km := 950;
+  samples[1].Notes := 'ACSR típico usado en líneas de media tensión.';
+
+  samples[2].ID := GenerateID + 2;
+  samples[2].Name := 'Alum - 16mm';
+  samples[2].Material := matAluminum;
+  samples[2].NumWires := 1;
+  samples[2].Diameter_mm := 16.0;
+  samples[2].RadiusGeom_m := (16.0/1000)/2;
+  samples[2].Resistance_ohm_per_km := 1.24;
+  samples[2].Impedance_ohm_per_km := 1.30;
+  samples[2].Capacitance_nf_per_km := 8.0;
+  samples[2].Inductance_h_per_km := 0.00130;
+  samples[2].TempRated_C := 90;
+  samples[2].TempMax_C := 150;
+  samples[2].LinearMass_kg_per_km := 600;
+  samples[2].Notes := 'Conductor de aluminio sólido.';
+
+  samples[3].ID := GenerateID + 3;
+  samples[3].Name := 'Cobre - 10mm';
+  samples[3].Material := matCopper;
+  samples[3].NumWires := 1;
+  samples[3].Diameter_mm := 10.0;
+  samples[3].RadiusGeom_m := (10.0/1000)/2;
+  samples[3].Resistance_ohm_per_km := 3.28;
+  samples[3].Impedance_ohm_per_km := 3.45;
+  samples[3].Capacitance_nf_per_km := 10.0;
+  samples[3].Inductance_h_per_km := 0.00110;
+  samples[3].TempRated_C := 105;
+  samples[3].TempMax_C := 180;
+  samples[3].LinearMass_kg_per_km := 890;
+  samples[3].Notes := 'Conductor de cobre para pruebas.';
+
+  samples[4].ID := GenerateID + 4;
+  samples[4].Name := 'Alu - Strand 50mm';
+  samples[4].Material := matAluminum;
+  samples[4].NumWires := 19;
+  samples[4].Diameter_mm := 50.0;
+  samples[4].RadiusGeom_m := (50.0/1000)/2;
+  samples[4].Resistance_ohm_per_km := 0.098;
+  samples[4].Impedance_ohm_per_km := 0.125;
+  samples[4].Capacitance_nf_per_km := 7.2;
+  samples[4].Inductance_h_per_km := 0.00105;
+  samples[4].TempRated_C := 75;
+  samples[4].TempMax_C := 160;
+  samples[4].LinearMass_kg_per_km := 2200;
+  samples[4].Notes := 'Conductor strand para alta capacidad.';
+
+  Seek(DB, FileSize(DB));
+  for i := 1 to 4 do
+    begin
+      Write(DB, samples[i]);
+      Inc(CurrentCount);
+    end;
+  TextColor(LightGreen);
+  WriteLn('4 conductores de muestra importados.');
+  WaitKey;
+end;
+
+procedure MainMenu;
+var
+  opt: Char;
+  i: Integer;
+begin
+  repeat
+    DrawHeader('Menu principal - Base de datos de conductores');
+    TextColor(White);
+    WriteLn('1) Ver lista de conductores');
+    WriteLn('2) Agregar conductor');
+    WriteLn('3) Editar conductor');
+    WriteLn('4) Eliminar conductor');
+    WriteLn('5) Buscar conductor');
+    WriteLn('6) Imprimir reporte (archivo .prn)');
+    WriteLn('7) Exportar reporte a PDF (archivo de texto .pdf)');
+    WriteLn('8) Importar datos de ejemplo (muestra)');
+    WriteLn('9) Animacion / Demo audiovisual');
+    WriteLn('0) Salir y cerrar');
+    TextColor(LightMagenta);
+    Write('Seleccione opción: ');
+    opt := ReadKey;
+    WriteLn(opt);
+    case opt of
+      '1': ListConductors;
+      '2': AddConductor;
+      '3': EditConductor;
+      '4': DeleteConductor;
+      '5': SearchConductor;
+      '6': PrintReport;
+      '7': ExportReportToFile(ReportFileName);
+      '8': ImportSampleData;
+      '9': begin
+             ClrScr;
+             DrawHeader('Demo audiovisual');
+             TextColor(LightCyan);
+             WriteLn('Iniciando demo: animacion de campo electromagnetico (simulada).');
+             WriteLn;
+             TextColor(Green);
+             for i := 1 to 60 do
+               begin
+                 GotoXY(10 + (i mod (ScreenWidth - 20)), 10 + Round(5 * Sin(i / 3.0)));
+                 Write(#176);
+                 Delay(35);
+               end;
+             WaitKey;
+           end;
+      '0': begin
+             ClrScr;
+             TextColor(LightRed);
+             WriteLn('Cerrando aplicación. Guardando y cerrando archivos...');
+             Close(DB);
+             Halt;
+           end;
+    else
+      begin
+        TextColor(Red);
+        WriteLn('Opción no válida. Intente nuevamente.');
+        Delay(400);
+      end;
+    end;
+  until False;
+end;
+
+{ -------------------------
+  Programa principal
+  ------------------------- }
+begin
+  TextBackground(Black);
+  ClrScr;
+  ShowSplash;
+  InitDB;
+  MainMenu;
+end.
