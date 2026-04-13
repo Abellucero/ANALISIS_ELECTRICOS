@@ -1,0 +1,577 @@
+{$mode objfpc}
+{
+  ================================================================================
+  PROGRAMA: ParametrosLineaTransmision.pas (versión final corregida)
+  AUTOR: Asistente para Abel
+  COMPILACIÓN: fpc -Mobjfpc ParametrosLineaTransmision.pas
+  ================================================================================
+}
+
+program ParametrosLineaTransmision;
+
+uses
+  SysUtils, Math;
+
+// 🔢 CONSTANTES
+const
+  PI = 3.14159265358979323846;
+  MU0 = 4.0 * PI * 1E-7;
+  EPS0 = 8.854187817E-12;
+
+// 🧮 TIPOS
+type
+  TComplejo = record
+    re, im: real;
+  end;
+
+  TCoordenada = record
+    x, y: real;
+  end;
+
+  TMatriz3x3 = array[1..3, 1..3] of real;
+
+// ════════════════════════════════════════════════════════════════════════════════
+// 🔹 FUNCIONES AUXILIARES
+// ════════════════════════════════════════════════════════════════════════════════
+
+function Distancia(p1, p2: TCoordenada): real;
+begin
+  Distancia := Sqrt(Sqr(p1.x - p2.x) + Sqr(p1.y - p2.y));
+end;
+
+// ════════════════════════════════════════════════════════════════════════════════
+// 🔹 OPERACIONES CON NÚMEROS COMPLEJOS
+// ════════════════════════════════════════════════════════════════════════════════
+
+function C_Suma(a, b: TComplejo): TComplejo;
+begin
+  C_Suma.re := a.re + b.re;
+  C_Suma.im := a.im + b.im;
+end;
+
+function C_Resta(a, b: TComplejo): TComplejo;
+begin
+  C_Resta.re := a.re - b.re;
+  C_Resta.im := a.im - b.im;
+end;
+
+function C_Mult(a, b: TComplejo): TComplejo;
+begin
+  C_Mult.re := a.re * b.re - a.im * b.im;
+  C_Mult.im := a.re * b.im + a.im * b.re;
+end;
+
+function C_MultReal(a: TComplejo; r: real): TComplejo;
+begin
+  C_MultReal.re := a.re * r;
+  C_MultReal.im := a.im * r;
+end;
+
+function C_Div(a, b: TComplejo): TComplejo;
+var
+  denom: real;
+begin
+  denom := b.re * b.re + b.im * b.im;
+  if Abs(denom) < 1E-15 then
+  begin
+    C_Div.re := 0; C_Div.im := 0;
+    exit;
+  end;
+  C_Div.re := (a.re * b.re + a.im * b.im) / denom;
+  C_Div.im := (a.im * b.re - a.re * b.im) / denom;
+end;
+
+function C_Sqrt(z: TComplejo): TComplejo;
+var
+  r, theta: real;
+begin
+  r := Sqrt(z.re * z.re + z.im * z.im);
+  theta := ArcTan2(z.im, z.re);
+  C_Sqrt.re := Sqrt(r) * Cos(theta / 2.0);
+  C_Sqrt.im := Sqrt(r) * Sin(theta / 2.0);
+end;
+
+function C_Exp(z: TComplejo): TComplejo;
+var
+  exp_re: real;
+begin
+  exp_re := Exp(z.re);
+  C_Exp.re := exp_re * Cos(z.im);
+  C_Exp.im := exp_re * Sin(z.im);
+end;
+
+function C_Sinh(z: TComplejo): TComplejo;
+var
+  e_pos, e_neg: TComplejo;
+begin
+  e_pos := C_Exp(z);
+  e_neg := C_Exp(C_MultReal(z, -1.0));
+  C_Sinh := C_MultReal(C_Resta(e_pos, e_neg), 0.5);
+end;
+
+function C_Cosh(z: TComplejo): TComplejo;
+var
+  e_pos, e_neg: TComplejo;
+begin
+  e_pos := C_Exp(z);
+  e_neg := C_Exp(C_MultReal(z, -1.0));
+  C_Cosh := C_MultReal(C_Suma(e_pos, e_neg), 0.5);
+end;
+
+procedure EscribirComplejo(z: TComplejo; prefijo, unidad: string);
+begin
+  if z.im >= 0 then
+    writeln(prefijo, z.re:10:6, ' + j', z.im:10:6, ' ', unidad)
+  else
+    writeln(prefijo, z.re:10:6, ' - j', Abs(z.im):10:6, ' ', unidad);
+end;
+
+// ════════════════════════════════════════════════════════════════════════════════
+// 🔹 VALIDACIÓN DE ENTRADAS
+// ════════════════════════════════════════════════════════════════════════════════
+
+function ValidarReal(var valor: real): boolean;
+var
+  s: string;
+  ok: boolean;
+begin
+  readln(s);
+  ok := TryStrToFloat(s, valor);
+  if not ok then
+    writeln('Entrada invalida. Intente con un numero real.');
+  ValidarReal := ok;
+end;
+
+function ValidarRealPositivo(var valor: real): boolean;
+begin
+  repeat
+    if not ValidarReal(valor) then Continue;
+    if valor <= 0 then
+      writeln('El valor debe ser positivo.');
+  until valor > 0;
+  ValidarRealPositivo := true;
+end;
+
+function ValidarEnteroRango(var valor: integer; min, max: integer): boolean;
+var
+  s: string;
+  ok: boolean;
+begin
+  repeat
+    readln(s);
+    ok := TryStrToInt(s, valor);
+    if not ok then
+    begin
+      writeln('Entrada invalida. Intente con un numero entero.');
+      Continue;
+    end;
+    if (valor < min) or (valor > max) then
+      writeln('Valor fuera de rango [', min, '-', max, '].');
+  until (valor >= min) and (valor <= max);
+  ValidarEnteroRango := true;
+end;
+
+// ════════════════════════════════════════════════════════════════════════════════
+// 🔹 CÁLCULO DE HAZ (GENERALIZADO, SIN CONSTANTES DINÁMICAS)
+// ════════════════════════════════════════════════════════════════════════════════
+
+function CalcularFactorK(num_sub: integer): real;
+begin
+  case num_sub of
+    2: CalcularFactorK := 1.0;
+    3: CalcularFactorK := Sqrt(3.0);               // ≈ 1.73205
+    4: CalcularFactorK := 2.0 * Sqrt(2.0);         // ≈ 2.82843
+    5: CalcularFactorK := Sqrt(5.0) * Power(5.0, 0.25); // ≈ 5^(0.5 + 0.25) = 5^0.75 ≈ 3.3437
+    6: CalcularFactorK := 6.0;
+    7: CalcularFactorK := 7.0;
+    8: CalcularFactorK := 8.0;
+  else
+    CalcularFactorK := 1.0;
+  end;
+end;
+
+procedure CalcularGMRyRadioBundle(
+  num_sub: integer;
+  gmr_m, radio_m, dist_bundle_m: real;
+  var GMR_out, Radio_out: real
+);
+var
+  k: real;
+begin
+  if num_sub = 1 then
+  begin
+    GMR_out := gmr_m;
+    Radio_out := radio_m;
+  end
+  else
+  begin
+    k := CalcularFactorK(num_sub);
+    GMR_out := Power(gmr_m * Power(dist_bundle_m, num_sub - 1) * k, 1.0 / num_sub);
+    Radio_out := Power(radio_m * Power(dist_bundle_m, num_sub - 1) * k, 1.0 / num_sub);
+  end;
+end;
+
+// ════════════════════════════════════════════════════════════════════════════════
+// 🔹 TRANSFORMACIÓN A SECUENCIA
+// ════════════════════════════════════════════════════════════════════════════════
+
+procedure TransformarASecuencia(Zabc: TMatriz3x3; var Z012: TMatriz3x3);
+var
+  Zs, Zm: real;
+begin
+  Zs := (Zabc[1,1] + Zabc[2,2] + Zabc[3,3]) / 3.0;
+  Zm := (Zabc[1,2] + Zabc[2,3] + Zabc[3,1]) / 3.0;
+  Z012[1,1] := Zs + 2.0 * Zm;
+  Z012[2,2] := Zs - Zm;
+  Z012[3,3] := Zs - Zm;
+  Z012[1,2] := 0; Z012[1,3] := 0;
+  Z012[2,1] := 0; Z012[2,3] := 0;
+  Z012[3,1] := 0; Z012[3,2] := 0;
+end;
+
+// ════════════════════════════════════════════════════════════════════════════════
+// 📥 VARIABLES GLOBALES
+// ════════════════════════════════════════════════════════════════════════════════
+
+var
+  frecuencia, longitud_km: real;
+  Rac_ohm_km: real;
+  diametro_ext_mm, gmr_mm: real;
+  num_subconductores: integer;
+  dist_bundle_cm: real;
+  coord_A, coord_B, coord_C: TCoordenada;
+  omega: real;
+  radio_m, gmr_m, dist_bundle_m: real;
+  GMR_bundle_m, Radio_bundle_m: real;
+  D_ab, D_bc, D_ca, GMD_m: real;
+  Zabc: TMatriz3x3;
+  Z012: TMatriz3x3;
+  Z1, Z0, Y1, Y0: TComplejo;
+  L1_H_m, C1_F_m, L0_H_m, C0_F_m: real;
+  Z_pi_total, Y_pi_shunt: TComplejo;
+  Zc, gamma: TComplejo;
+  A_param, B_param, C_param, D_param: TComplejo;
+
+// ════════════════════════════════════════════════════════════════════════════════
+// 📌 SUBRUTINAS PRINCIPALES
+// ════════════════════════════════════════════════════════════════════════════════
+
+procedure LeerDatosGenerales;
+begin
+  writeln('----------------------------------------------------');
+  writeln('|           DATOS GENERALES DEL SISTEMA            |');
+  writeln('----------------------------------------------------');
+  writeln('Ejemplo: Frecuencia = 60 Hz, Longitud = 150 km');
+  repeat
+    write('Frecuencia del sistema (Hz) [50 o 60]: ');
+  until ValidarRealPositivo(frecuencia);
+  repeat
+    write('Longitud total de la linea (km): ');
+  until ValidarRealPositivo(longitud_km);
+  writeln;
+end;
+
+procedure LeerDatosConductor;
+begin
+  writeln('----------------------------------------------------');
+  writeln('|           DATOS DEL CONDUCTOR DE FASE            |');
+  writeln('----------------------------------------------------');
+  writeln('Ejemplo: Rac = 0.05 Ohm/km, Diam = 25 mm, GMR = 9.5 mm');
+  repeat
+    write('Resistencia AC a la temperatura de operacion (Ohm/km): ');
+  until ValidarRealPositivo(Rac_ohm_km);
+  repeat
+    write('Diametro externo del conductor (mm): ');
+  until ValidarRealPositivo(diametro_ext_mm);
+  repeat
+    write('Radio Medio Geometrico (GMR) del conductor (mm): ');
+  until ValidarRealPositivo(gmr_mm);
+
+  writeln;
+  writeln('----------------------------------------------------');
+  writeln('|             CONFIGURACION DEL HAZ                |');
+  writeln('----------------------------------------------------');
+  writeln('Numero de subconductores por fase (1 a 8):');
+  repeat
+    write('Numero de subconductores por fase (1 si no es en haz): ');
+  until ValidarEnteroRango(num_subconductores, 1, 8);
+
+  if num_subconductores > 1 then
+  begin
+    repeat
+      write('Distancia entre subconductores adyacentes del haz (cm): ');
+    until ValidarRealPositivo(dist_bundle_cm);
+  end
+  else
+    dist_bundle_cm := 0;
+  writeln;
+end;
+
+procedure ConfigurarGeometria;
+var
+  dist_m, h_m: real;
+  opcion_geo: char;
+begin
+  writeln('----------------------------------------------------');
+  writeln('|      CONFIGURACION GEOMETRICA DE LA TORRE        |');
+  writeln('----------------------------------------------------');
+  writeln('Seleccione el tipo de disposicion:');
+  writeln('  [H] Horizontal');
+  writeln('  [V] Vertical');
+  writeln('  [T] Triangular Equilatera');
+  writeln('  [A] Asimetrica (ingresar coordenadas x,y en metros)');
+  write('Opcion: ');
+  readln(opcion_geo);
+  opcion_geo := UpCase(opcion_geo);
+
+  case opcion_geo of
+    'H':
+      begin
+        repeat
+          write('Distancia horizontal entre fases adyacentes (m): ');
+        until ValidarRealPositivo(dist_m);
+        repeat
+          write('Altura promedio sobre suelo (m): ');
+        until ValidarRealPositivo(h_m);
+        coord_B.x := 0; coord_B.y := h_m;
+        coord_A.x := -dist_m; coord_A.y := h_m;
+        coord_C.x := dist_m; coord_C.y := h_m;
+      end;
+    'V':
+      begin
+        repeat
+          write('Distancia vertical entre fases adyacentes (m): ');
+        until ValidarRealPositivo(dist_m);
+        repeat
+          write('Altura del conductor central sobre suelo (m): ');
+        until ValidarRealPositivo(h_m);
+        coord_B.x := 0; coord_B.y := h_m;
+        coord_A.x := 0; coord_A.y := h_m + dist_m;
+        coord_C.x := 0; coord_C.y := h_m - dist_m;
+      end;
+    'T':
+      begin
+        repeat
+          write('Lado del triangulo equilatero (m): ');
+        until ValidarRealPositivo(dist_m);
+        repeat
+          write('Altura de la base sobre suelo (m): ');
+        until ValidarRealPositivo(h_m);
+        coord_A.x := -dist_m / 2; coord_A.y := h_m;
+        coord_B.x := dist_m / 2; coord_B.y := h_m;
+        coord_C.x := 0; coord_C.y := h_m + (Sqrt(3)/2 * dist_m);
+      end;
+    'A':
+      begin
+        writeln('Ingrese coordenadas (x,y) en metros. Origen = centro al suelo.');
+        repeat
+          write('Fase A - x (m): '); readln(coord_A.x);
+          write('Fase A - y (m): '); readln(coord_A.y);
+        until (coord_A.y > 0);
+        repeat
+          write('Fase B - x (m): '); readln(coord_B.x);
+          write('Fase B - y (m): '); readln(coord_B.y);
+        until (coord_B.y > 0);
+        repeat
+          write('Fase C - x (m): '); readln(coord_C.x);
+          write('Fase C - y (m): '); readln(coord_C.y);
+        until (coord_C.y > 0);
+      end;
+  else
+    begin
+      writeln('Opcion invalida. Usando geometria horizontal por defecto.');
+      coord_A.x := -8; coord_A.y := 20;
+      coord_B.x := 0; coord_B.y := 20;
+      coord_C.x := 8; coord_C.y := 20;
+    end;
+  end;
+  writeln;
+end;
+
+procedure CalcularParametros;
+var
+  Rac_ohm_m: real;
+  hA, hB, hC: real;
+  imgA, imgB, imgC: TCoordenada;
+  Daa_img, Dbb_img, Dcc_img: real;
+  Dab_img, Dac_img, Dba_img, Dbc_img, Dca_img, Dcb_img: real;
+begin
+  radio_m := (diametro_ext_mm / 2.0) / 1000.0;
+  gmr_m := gmr_mm / 1000.0;
+  dist_bundle_m := dist_bundle_cm / 100.0;
+  Rac_ohm_m := Rac_ohm_km / 1000.0;
+  omega := 2.0 * PI * frecuencia;
+
+  if (radio_m <= 0) or (gmr_m <= 0) then
+  begin
+    writeln('ERROR: Radio o GMR no validos.');
+    halt(1);
+  end;
+
+  CalcularGMRyRadioBundle(num_subconductores, gmr_m, radio_m, dist_bundle_m, GMR_bundle_m, Radio_bundle_m);
+
+  D_ab := Distancia(coord_A, coord_B);
+  D_bc := Distancia(coord_B, coord_C);
+  D_ca := Distancia(coord_C, coord_A);
+  GMD_m := Power(D_ab * D_bc * D_ca, 1.0/3.0);
+
+  if GMD_m <= GMR_bundle_m then
+  begin
+    writeln('ERROR: GMD <= GMR. Revise geometria.');
+    halt(1);
+  end;
+
+  hA := coord_A.y; hB := coord_B.y; hC := coord_C.y;
+  imgA.x := coord_A.x; imgA.y := -hA;
+  imgB.x := coord_B.x; imgB.y := -hB;
+  imgC.x := coord_C.x; imgC.y := -hC;
+
+  Daa_img := Distancia(coord_A, imgA);
+  Dbb_img := Distancia(coord_B, imgB);
+  Dcc_img := Distancia(coord_C, imgC);
+  Dab_img := Distancia(coord_A, imgB);
+  Dac_img := Distancia(coord_A, imgC);
+  Dba_img := Distancia(coord_B, imgA);
+  Dbc_img := Distancia(coord_B, imgC);
+  Dca_img := Distancia(coord_C, imgA);
+  Dcb_img := Distancia(coord_C, imgB);
+
+  Zabc[1,1] := Rac_ohm_m + omega * (MU0/(2*PI)) * Ln(Daa_img / GMR_bundle_m);
+  Zabc[2,2] := Rac_ohm_m + omega * (MU0/(2*PI)) * Ln(Dbb_img / GMR_bundle_m);
+  Zabc[3,3] := Rac_ohm_m + omega * (MU0/(2*PI)) * Ln(Dcc_img / GMR_bundle_m);
+  Zabc[1,2] := omega * (MU0/(2*PI)) * Ln(Dab_img / D_ab);
+  Zabc[1,3] := omega * (MU0/(2*PI)) * Ln(Dac_img / D_ca);
+  Zabc[2,1] := Zabc[1,2];
+  Zabc[2,3] := omega * (MU0/(2*PI)) * Ln(Dbc_img / D_bc);
+  Zabc[3,1] := Zabc[1,3];
+  Zabc[3,2] := Zabc[2,3];
+
+  TransformarASecuencia(Zabc, Z012);
+
+  L1_H_m := (MU0 / (2*PI)) * Ln(GMD_m / GMR_bundle_m);
+  C1_F_m := (2*PI*EPS0) / Ln(GMD_m / Radio_bundle_m);
+  Z1.re := Rac_ohm_m;
+  Z1.im := omega * L1_H_m;
+  Y1.re := 0;
+  Y1.im := omega * C1_F_m;
+
+  L0_H_m := (MU0 / (2*PI)) * (
+    (Ln(2*hA/GMR_bundle_m) + Ln(2*hB/GMR_bundle_m) + Ln(2*hC/GMR_bundle_m)) +
+    2*(Ln(Dab_img/D_ab) + Ln(Dbc_img/D_bc) + Ln(Dca_img/D_ca))
+  ) / 3.0;
+
+  C0_F_m := 1.0 / ((1/(2*PI*EPS0)) * (
+    (Ln(2*hA/Radio_bundle_m) + Ln(2*hB/Radio_bundle_m) + Ln(2*hC/Radio_bundle_m)) +
+    2*(Ln(Dab_img/D_ab) + Ln(Dbc_img/D_bc) + Ln(Dca_img/D_ca))
+  ) / 3.0);
+
+  Z0.re := Rac_ohm_m;
+  Z0.im := omega * L0_H_m;
+  Y0.re := 0;
+  Y0.im := omega * C0_F_m;
+
+  Z_pi_total := C_MultReal(Z1, longitud_km * 1000.0);
+  Y_pi_shunt := C_MultReal(Y1, longitud_km * 1000.0 / 2.0);
+
+  Zc := C_Sqrt(C_Div(Z1, Y1));
+  gamma := C_Sqrt(C_Mult(Z1, Y1));
+
+  A_param := C_Cosh(C_MultReal(gamma, longitud_km * 1000.0));
+  D_param := A_param;
+  B_param := C_Mult(Zc, C_Sinh(C_MultReal(gamma, longitud_km * 1000.0)));
+  C_param := C_Div(C_Sinh(C_MultReal(gamma, longitud_km * 1000.0)), Zc);
+end;
+
+procedure GuardarResultadosCSV;
+var
+  f: TextFile;
+  factor_km: real = 1000.0;
+  Z1_km, Y1_km, Z0_km, Y0_km: TComplejo;
+begin
+  AssignFile(f, 'resultados_linea_transmision.csv');
+  Rewrite(f);
+  writeln(f, 'Parametro,Valor,Unidad');
+  writeln(f, 'Frecuencia,',FloatToStr(frecuencia),',Hz');
+  writeln(f, 'Longitud,',FloatToStr(longitud_km),',km');
+  writeln(f, 'GMD,',FloatToStr(GMD_m),',m');
+  writeln(f, 'GMR_bundle,',FloatToStr(GMR_bundle_m),',m');
+
+  Z1_km := C_MultReal(Z1, factor_km);
+  Y1_km := C_MultReal(Y1, factor_km);
+  Z0_km := C_MultReal(Z0, factor_km);
+  Y0_km := C_MultReal(Y0, factor_km);
+
+  writeln(f, 'Z1_real,',FloatToStr(Z1_km.re),',Ohm/km');
+  writeln(f, 'Z1_imag,',FloatToStr(Z1_km.im),',Ohm/km');
+  writeln(f, 'Y1_real,',FloatToStr(Y1_km.re),',S/km');
+  writeln(f, 'Y1_imag,',FloatToStr(Y1_km.im),',S/km');
+  writeln(f, 'Z0_real,',FloatToStr(Z0_km.re),',Ohm/km');
+  writeln(f, 'Z0_imag,',FloatToStr(Z0_km.im),',Ohm/km');
+  writeln(f, 'Y0_real,',FloatToStr(Y0_km.re),',S/km');
+  writeln(f, 'Y0_imag,',FloatToStr(Y0_km.im),',S/km');
+
+  writeln(f, 'Zc_real,',FloatToStr(Zc.re),',Ohm');
+  writeln(f, 'Zc_imag,',FloatToStr(Zc.im),',Ohm');
+  writeln(f, 'gamma_real,',FloatToStr(gamma.re * 1000.0),',1/km');
+  writeln(f, 'gamma_imag,',FloatToStr(gamma.im * 1000.0),',rad/km');
+
+  CloseFile(f);
+  writeln('Resultados guardados en: resultados_linea_transmision.csv');
+end;
+
+procedure MostrarResultados;
+var
+  factor_km: real = 1000.0;
+  Z1_km, Y1_km, Z0_km, Y0_km: TComplejo;
+begin
+  Z1_km := C_MultReal(Z1, factor_km);
+  Y1_km := C_MultReal(Y1, factor_km);
+  Z0_km := C_MultReal(Z0, factor_km);
+  Y0_km := C_MultReal(Y0, factor_km);
+
+  writeln('================================================================');
+  writeln('|             RESULTADOS DETALLADOS DEL ANALISIS               |');
+  writeln('================================================================');
+  writeln('GMD = ', GMD_m:10:4, ' m   |   GMR_bundle = ', GMR_bundle_m:10:6, ' m');
+  writeln;
+  writeln('--- SECUENCIA POSITIVA (por km) ---');
+  EscribirComplejo(Z1_km, 'Z1 = ', 'Ohm/km');
+  EscribirComplejo(Y1_km, 'Y1 = ', 'S/km');
+  writeln;
+  writeln('--- SECUENCIA CERO (por km) ---');
+  EscribirComplejo(Z0_km, 'Z0 = ', 'Ohm/km');
+  EscribirComplejo(Y0_km, 'Y0 = ', 'S/km');
+  writeln;
+  writeln('--- PARÁMETROS DISTRIBUIDOS ---');
+  EscribirComplejo(Zc, 'Zc = ', 'Ohm');
+  EscribirComplejo(C_MultReal(gamma, 1000.0), 'γ = ', '1/km');
+  writeln;
+  writeln('--- PARÁMETROS ABCD (modelo largo) ---');
+  EscribirComplejo(A_param, 'A = ', '');
+  EscribirComplejo(B_param, 'B = ', 'Ohm');
+  EscribirComplejo(C_param, 'C = ', 'S');
+  EscribirComplejo(D_param, 'D = ', '');
+  writeln('================================================================');
+end;
+
+// ════════════════════════════════════════════════════════════════════════════════
+// 🚀 PROGRAMA PRINCIPAL
+// ════════════════════════════════════════════════════════════════════════════════
+
+begin
+  writeln('****************************************************************');
+  writeln('* CALCULO DE PARAMETROS DE LINEAS DE TRANSMISION (MEJORADO)    *');
+  writeln('****************************************************************');
+  writeln;
+
+  LeerDatosGenerales;
+  LeerDatosConductor;
+  ConfigurarGeometria;
+  CalcularParametros;
+  MostrarResultados;
+  GuardarResultadosCSV;
+
+  writeln;
+  writeln('✅ Analisis completado. Presione ENTER para salir.');
+  readln;
+end.
