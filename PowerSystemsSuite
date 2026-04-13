@@ -1,0 +1,3203 @@
+{$R-}
+{$B+}
+{$S+}
+{$I+}
+{$N-}
+{$M 65500,16384,655360}
+
+PROGRAM PowerSystemsSuite;
+
+USES Crt, Printer;
+
+(******************************************************************************)
+(* *)
+(* ANALIZADOR DE SISTEMAS ELECTRICOS DE POTENCIA                              *)
+(* *)
+(* Suite de herramientas optimizada y rediseñada para el análisis de SEP. *)
+(* Versión 2.0                                                                *)
+(* *)
+(******************************************************************************)
+
+
+(******************************************************************************)
+(* SECCION GLOBAL DE TIPOS Y CONSTANTES                                       *)
+(******************************************************************************)
+
+CONST
+    PI = 3.1415926535;
+    MAX_BUSES  = 30;
+    MAX_LINEAS = 80;
+    MAX_GEN    = 25;
+    MAX_TRAN   = 15;
+    MAX_EPUC_RESULTS = 50;
+    MAX_CASOS_FP = 100;
+
+TYPE
+    TComplex = RECORD
+        R, I: Real;
+    END;
+
+    TPolar = RECORD
+        M, A: Real;
+    END;
+
+
+
+(******************************************************************************)
+(* SECCION GLOBAL DE UTILIDADES Y FUNCIONES                                   *)
+(******************************************************************************)
+
+(* ========================================================================== *)
+(* FUNCIONES PARA NUMEROS COMPLEJOS                                           *)
+(* ========================================================================== *)
+
+// Crea un número complejo a partir de sus partes real e imaginaria
+FUNCTION C(RealPart, ImagPart: Real): TComplex;
+BEGIN
+    C.R := RealPart;
+    C.I := ImagPart;
+END;
+
+// Suma de dos números complejos: Res = A + B
+FUNCTION C_Add(A, B: TComplex): TComplex;
+BEGIN
+    C_Add.R := A.R + B.R;
+    C_Add.I := A.I + B.I;
+END;
+
+// Resta de dos números complejos: Res = A - B
+FUNCTION C_Sub(A, B: TComplex): TComplex;
+BEGIN
+    C_Sub.R := A.R - B.R;
+    C_Sub.I := A.I - B.I;
+END;
+
+// Multiplicación de dos números complejos: Res = A * B
+FUNCTION C_Mul(A, B: TComplex): TComplex;
+VAR
+    Resultado: TComplex;
+BEGIN
+    Resultado.R := A.R * B.R - A.I * B.I;
+    Resultado.I := A.R * B.I + A.I * B.R;
+    C_Mul := Resultado;
+END;
+
+// Inverso de un número complejo: Res = 1 / A
+FUNCTION C_Inv(A: TComplex): TComplex;
+VAR
+    Denom: Real;
+    Resultado: TComplex;
+BEGIN
+    Denom := Sqr(A.R) + Sqr(A.I);
+    IF Denom = 0 THEN
+    BEGIN
+        Resultado.R := 0;
+        Resultado.I := 0;
+    END
+    ELSE
+    BEGIN
+        Resultado.R := A.R / Denom;
+        Resultado.I := -A.I / Denom;
+    END;
+    C_Inv := Resultado;
+END;
+
+// División de dos números complejos: Res = A / B
+FUNCTION C_Div(A, B: TComplex): TComplex;
+BEGIN
+    C_Div := C_Mul(A, C_Inv(B));
+END;
+
+// Magnitud (valor absoluto) de un número complejo
+FUNCTION C_Abs(A: TComplex): Real;
+BEGIN
+    C_Abs := Sqrt(Sqr(A.R) + Sqr(A.I));
+END;
+
+// Ángulo de un número complejo en grados
+FUNCTION C_Angle_Deg(A: TComplex): Real;
+CONST
+    RAD_A_GRADOS = 180 / PI;
+VAR
+    AnguloRad: Real;
+BEGIN
+    IF A.R = 0 THEN
+    BEGIN
+        IF A.I > 0 THEN AnguloRad := PI / 2
+        ELSE IF A.I < 0 THEN AnguloRad := -PI / 2
+        ELSE AnguloRad := 0;
+    END
+    ELSE
+    BEGIN
+        AnguloRad := ArcTan(A.I / A.R);
+        // Ajuste de cuadrante
+        IF (A.R < 0) THEN
+            AnguloRad := AnguloRad + PI;
+    END;
+    C_Angle_Deg := AnguloRad * RAD_A_GRADOS;
+END;
+
+// Imprime un número complejo en formato rectangular (R + jI)
+PROCEDURE C_Print(Z: TComplex; Dec: Integer);
+BEGIN
+    IF Z.I >= 0 THEN
+        Write(Z.R:0:Dec, ' + j', Z.I:0:Dec)
+    ELSE
+        Write(Z.R:0:Dec, ' - j', Abs(Z.I):0:Dec);
+END;
+
+// Imprime un número complejo en formato polar (Mag < Ang°)
+PROCEDURE C_Print_Polar(Z: TComplex; Dec: Integer);
+BEGIN
+    Write(C_Abs(Z):0:Dec, ' < ', C_Angle_Deg(Z):0:2, ' deg');
+END;
+
+(* ========================================================================== *)
+(* PROCEDIMIENTOS DE INTERFAZ DE USUARIO                                      *)
+(* ========================================================================== *)
+
+// Dibuja un banner estandarizado para cada módulo
+PROCEDURE DrawHeader(Title: String; MainColor, FrameColor: Byte);
+VAR
+    Bar: String;
+    i: Integer;
+BEGIN
+    Bar := '';
+    FOR i := 1 TO 80 DO Bar := Bar + #205; // Caracter ═
+    TextBackground(Black);
+    TextColor(FrameColor);
+    GoToXY(1, 1); Write(Bar);
+    GoToXY(1, 3); Write(Bar);
+
+    TextColor(MainColor);
+    GoToXY((80 - Length(Title)) DIV 2, 2);
+    Write(Title);
+    TextColor(White);
+    GoToXY(1, 5);
+END;
+
+// Dibuja una caja para los menús
+PROCEDURE DrawBox(x1, y1, x2, y2: Integer; Color: Byte);
+VAR i: Integer;
+BEGIN
+    TextColor(Color);
+    GoToXY(x1, y1); Write(#201); // ╔
+    FOR i := x1 + 1 TO x2 - 1 DO Write(#205); // ═
+    Write(#187); // ╗
+
+    FOR i := y1 + 1 TO y2 - 1 DO
+    BEGIN
+        GoToXY(x1, i); Write(#186); // ║
+        GoToXY(x2, i); Write(#186); // ║
+    END;
+
+    GoToXY(x1, y2); Write(#200); // ╚
+    FOR i := x1 + 1 TO x2 - 1 DO Write(#205); // ═
+    Write(#188); // ╝
+END;
+
+
+(******************************************************************************)
+(* *)
+(* MODULO 1: CALCULADORA DE IMPEDANCIAS EN POR UNIDAD (p.u.)                  *)
+(* *)
+(******************************************************************************)
+PROCEDURE Run_PerUnitCalculator;
+
+TYPE
+    TResultadoPU = RECORD
+        TipoElemento : String[40];
+        ImpedanciaPU : TComplex;
+    END;
+
+VAR
+    Resultados : ARRAY[1..MAX_EPUC_RESULTS] OF TResultadoPU;
+    ContadorResultados : Integer;
+    Opcion : Char;
+    MvaBase, KvBase : Real;
+    NombreArchivo : String[12];
+
+    PROCEDURE Banner;
+    BEGIN
+        DrawHeader('Calculo de Impedancias en Por Unidad (p.u.)', Yellow, LightBlue);
+    END;
+
+    PROCEDURE EstablecerValoresBase;
+    BEGIN
+        ClrScr;
+        Banner;
+        TextColor(Cyan);
+        WriteLn('--- ESTABLECER VALORES BASE DEL SISTEMA ---');
+        TextColor(White);
+        Write('Ingrese la Potencia Base del Sistema (MVA): ');
+        ReadLn(MvaBase);
+        Write('Ingrese el Voltaje Base del Sistema (kV): ');
+        ReadLn(KvBase);
+        WriteLn;
+        TextColor(Green);
+        WriteLn('Valores base guardados correctamente.');
+        Delay(1500);
+    END;
+
+    PROCEDURE CalcularMotoresGeneradores;
+    VAR
+        Hp, Pf, Eff, KvEq, Xd, XR_Ratio, MvaEq, Z_pu_own_mag, Angulo : Real;
+        Z_pu_new : TComplex;
+    BEGIN
+        ClrScr;
+        Banner;
+        TextColor(Cyan);
+        WriteLn('--- CALCULO: MOTORES O GENERADORES (> 50 HP) ---');
+        TextColor(White);
+        Write('Potencia del equipo (HP): '); ReadLn(Hp);
+        Write('Factor de Potencia (ej. 0.85): '); ReadLn(Pf);
+        Write('Eficiencia (ej. 0.9): '); ReadLn(Eff);
+        Write('Voltaje del equipo (kV): '); ReadLn(KvEq);
+        Write('Reactancia Subtransitoria (p.u. en su base, ej. 0.15): '); ReadLn(Xd);
+        Write('Relacion X/R: '); ReadLn(XR_Ratio);
+
+        MvaEq := (Hp * 0.000746) / (Eff * Pf);
+        Z_pu_own_mag := Xd;
+        Angulo := ArcTan(XR_Ratio);
+        Z_pu_new.R := Z_pu_own_mag * Cos(Angulo) * (MvaBase / MvaEq) * Sqr(KvEq / KvBase);
+        Z_pu_new.I := Z_pu_own_mag * Sin(Angulo) * (MvaBase / MvaEq) * Sqr(KvEq / KvBase); (* CORREGIDO: .X -> .I *)
+
+        Inc(ContadorResultados);
+        Resultados[ContadorResultados].TipoElemento := 'Motor/Generador >50HP';
+        Resultados[ContadorResultados].ImpedanciaPU := Z_pu_new;
+
+        TextColor(Green);
+        WriteLn;
+        WriteLn('Cálculo completado:');
+        Write('Impedancia (p.u.): '); C_Print(Z_pu_new, 6); WriteLn;
+        WriteLn('Resultado guardado.');
+        ReadKey;
+    END;
+
+    PROCEDURE CalcularMotoresMenores50Hp;
+    VAR
+        HpTotal, Pf, Eff, KvEq, Xd, XR_Ratio, MvaEq, Z_pu_own_mag, Angulo : Real;
+        Z_pu_new : TComplex;
+    BEGIN
+        ClrScr;
+        Banner;
+        TextColor(Cyan);
+        WriteLn('--- CALCULO: MOTORES AGRUPADOS (< 50 HP) ---');
+        TextColor(White);
+        Write('Suma de Potencia de los motores (HP Total): '); ReadLn(HpTotal);
+        Write('Factor de Potencia promedio (ej. 0.8): '); ReadLn(Pf);
+        Write('Eficiencia promedio (ej. 0.85): '); ReadLn(Eff);
+        Write('Voltaje del grupo de motores (kV): '); ReadLn(KvEq);
+        Write('Reactancia Subtransitoria promedio (p.u., ej. 0.25): '); ReadLn(Xd);
+        Write('Relacion X/R promedio: '); ReadLn(XR_Ratio);
+
+        MvaEq := (HpTotal * 0.000746) / (Eff * Pf);
+        Z_pu_own_mag := Xd;
+        Angulo := ArcTan(XR_Ratio);
+        Z_pu_new.R := Z_pu_own_mag * Cos(Angulo) * (MvaBase / MvaEq) * Sqr(KvEq / KvBase);
+        Z_pu_new.I := Z_pu_own_mag * Sin(Angulo) * (MvaBase / MvaEq) * Sqr(KvEq / KvBase); (* CORREGIDO: .X -> .I *)
+
+        Inc(ContadorResultados);
+        Resultados[ContadorResultados].TipoElemento := 'Motores Agrupados <50HP';
+        Resultados[ContadorResultados].ImpedanciaPU := Z_pu_new;
+
+        TextColor(Green);
+        WriteLn;
+        WriteLn('Cálculo completado:');
+        Write('Impedancia (p.u.): '); C_Print(Z_pu_new, 6); WriteLn;
+        WriteLn('Resultado guardado.');
+        ReadKey;
+    END;
+
+    PROCEDURE CalcularTransformadores;
+    VAR
+        MvaEq, Z_pct, XR_Ratio, Z_pu_own_mag, Angulo: Real;
+        Z_pu_new : TComplex;
+        TipoDevanado: Char;
+    BEGIN
+        ClrScr;
+        Banner;
+        TextColor(Cyan);
+        WriteLn('--- CALCULO: TRANSFORMADORES ---');
+        TextColor(White);
+        Write('Potencia del transformador (MVA): '); ReadLn(MvaEq);
+        Write('Impedancia del transformador (%Z, ej. 5.5): '); ReadLn(Z_pct);
+        Write('Relacion X/R: '); ReadLn(XR_Ratio);
+
+        Z_pu_own_mag := Z_pct / 100;
+        Angulo := ArcTan(XR_Ratio);
+        Z_pu_new.R := Z_pu_own_mag * Cos(Angulo) * (MvaBase / MvaEq);
+        Z_pu_new.I := Z_pu_own_mag * Sin(Angulo) * (MvaBase / MvaEq); (* CORREGIDO: .X -> .I *)
+
+        Inc(ContadorResultados);
+        Resultados[ContadorResultados].TipoElemento := 'Transformador';
+        Resultados[ContadorResultados].ImpedanciaPU := Z_pu_new;
+        TextColor(Green);
+        WriteLn;
+        WriteLn('Cálculo completado:');
+        Write('Impedancia (p.u.): '); C_Print(Z_pu_new, 6); WriteLn;
+        WriteLn('Resultado guardado.');
+        ReadKey;
+    END;
+
+    PROCEDURE CalcularCables;
+    VAR
+        R_ohm_km, X_ohm_km, Longitud, Zbase : Real;
+        NumConductores : Integer;
+        Z_pu : TComplex;
+    BEGIN
+        ClrScr;
+        Banner;
+        TextColor(Cyan);
+        WriteLn('--- CALCULO: CABLES ---');
+        TextColor(White);
+        Write('Resistencia por km (Ohm/km): '); ReadLn(R_ohm_km);
+        Write('Reactancia por km (Ohm/km): '); ReadLn(X_ohm_km);
+        Write('Longitud del cable (km): '); ReadLn(Longitud);
+        Write('Numero de conductores por fase: '); ReadLn(NumConductores);
+
+        Zbase := Sqr(KvBase) / MvaBase;
+        Z_pu.R := (R_ohm_km * Longitud / NumConductores) / Zbase;
+        Z_pu.I := (X_ohm_km * Longitud / NumConductores) / Zbase; (* CORREGIDO: .X -> .I *)
+
+        Inc(ContadorResultados);
+        Resultados[ContadorResultados].TipoElemento := 'Cable de Potencia';
+        Resultados[ContadorResultados].ImpedanciaPU := Z_pu;
+
+        TextColor(Green);
+        WriteLn;
+        WriteLn('Cálculo completado:');
+        Write('Impedancia (p.u.): '); C_Print(Z_pu, 6); WriteLn;
+        WriteLn('Resultado guardado.');
+        ReadKey;
+    END;
+
+    PROCEDURE CalcularLineasSimplificado;
+    VAR
+        R_ohm, X_ohm, Zbase : Real;
+        Z_pu : TComplex;
+    BEGIN
+        ClrScr;
+        Banner;
+        TextColor(Cyan);
+        WriteLn('--- CALCULO: LINEAS DE TRANSMISION (SIMPLIFICADO) ---');
+        TextColor(White);
+        Write('Resistencia total de la linea (Ohm): '); ReadLn(R_ohm);
+        Write('Reactancia total de la linea (Ohm): '); ReadLn(X_ohm);
+
+        Zbase := Sqr(KvBase) / MvaBase;
+        Z_pu.R := R_ohm / Zbase;
+        Z_pu.I := X_ohm / Zbase; (* CORREGIDO: .X -> .I *)
+
+        Inc(ContadorResultados);
+        Resultados[ContadorResultados].TipoElemento := 'Linea de Transmision';
+        Resultados[ContadorResultados].ImpedanciaPU := Z_pu;
+        TextColor(Green);
+        WriteLn;
+        WriteLn('Cálculo completado:');
+        Write('Impedancia (p.u.): '); C_Print(Z_pu, 6); WriteLn;
+        WriteLn('Resultado guardado.');
+        ReadKey;
+    END;
+
+    PROCEDURE CalcularAcometida;
+    VAR
+        MvaSCC, XR_Ratio, Z_pu_mag, Angulo : Real;
+        Z_pu : TComplex;
+    BEGIN
+        ClrScr;
+        Banner;
+        TextColor(Cyan);
+        WriteLn('--- CALCULO: ACOMETIDA (UTILIDAD) ---');
+        TextColor(White);
+        Write('Potencia de Cortocircuito en el punto (MVA SCC): '); ReadLn(MvaSCC);
+        Write('Relacion X/R en el punto: '); ReadLn(XR_Ratio);
+
+        Z_pu_mag := MvaBase / MvaSCC;
+        Angulo := ArcTan(XR_Ratio);
+        Z_pu.R := Z_pu_mag * Cos(Angulo);
+        Z_pu.I := Z_pu_mag * Sin(Angulo); (* CORREGIDO: .X -> .I *)
+
+        Inc(ContadorResultados);
+        Resultados[ContadorResultados].TipoElemento := 'Acometida (Utilidad)';
+        Resultados[ContadorResultados].ImpedanciaPU := Z_pu;
+        TextColor(Green);
+        WriteLn;
+        WriteLn('Cálculo completado:');
+        Write('Impedancia (p.u.): '); C_Print(Z_pu, 6); WriteLn;
+        WriteLn('Resultado guardado.');
+        ReadKey;
+    END;
+
+    PROCEDURE CalcularReactores;
+    VAR
+        X_ohm, Zbase : Real;
+        Z_pu : TComplex;
+    BEGIN
+        ClrScr;
+        Banner;
+        TextColor(Cyan);
+        WriteLn('--- CALCULO: REACTORES ---');
+        TextColor(White);
+        Write('Reactancia del reactor (Ohms): '); ReadLn(X_ohm);
+
+        Zbase := Sqr(KvBase) / MvaBase;
+        Z_pu.R := 0; // Se asume un reactor ideal sin resistencia
+        Z_pu.I := X_ohm / Zbase; (* CORREGIDO: .X -> .I *)
+
+        Inc(ContadorResultados);
+        Resultados[ContadorResultados].TipoElemento := 'Reactor';
+        Resultados[ContadorResultados].ImpedanciaPU := Z_pu;
+        TextColor(Green);
+        WriteLn;
+        WriteLn('Cálculo completado:');
+        Write('Impedancia (p.u.): '); C_Print(Z_pu, 6); WriteLn;
+        WriteLn('Resultado guardado.');
+        ReadKey;
+    END;
+
+    PROCEDURE MostrarResultadosEnPantalla;
+    VAR i : Integer;
+    BEGIN
+        ClrScr;
+        Banner;
+        TextColor(Cyan);
+        WriteLn('--- RESULTADOS DE CALCULOS ALMACENADOS ---');
+        WriteLn;
+        TextColor(Yellow);
+        WriteLn('No. | TIPO DE ELEMENTO                      | R (p.u.)     | I (p.u.)'); (* CORREGIDO: X -> I *)
+        WriteLn('-----------------------------------------------------------------------------');
+        TextColor(White);
+        IF ContadorResultados = 0 THEN
+            WriteLn('No hay resultados para mostrar.')
+        ELSE
+            FOR i := 1 TO ContadorResultados DO
+            BEGIN
+                Write(i:3, ' | ');
+                Write(Resultados[i].TipoElemento:38, ' | ');
+                Write(Resultados[i].ImpedanciaPU.R:12:8, ' | ');
+                WriteLn(Resultados[i].ImpedanciaPU.I:12:8); (* CORREGIDO: .X -> .I *)
+            END;
+        WriteLn;
+        WriteLn('Presione cualquier tecla para continuar...');
+        ReadKey;
+    END;
+
+    PROCEDURE GuardarResultadosEnArchivo;
+    VAR
+        Archivo : Text;
+        i : Integer;
+    BEGIN
+        ClrScr;
+        Banner;
+        TextColor(Cyan);
+        WriteLn('--- GUARDAR RESULTADOS EN ARCHIVO ---');
+        TextColor(White);
+        IF ContadorResultados = 0 THEN
+        BEGIN
+            TextColor(Red);
+            WriteLn('No hay resultados para guardar.');
+        END
+        ELSE
+        BEGIN
+            Assign(Archivo, NombreArchivo);
+            Rewrite(Archivo);
+            WriteLn(Archivo,'====================================================================');
+            WriteLn(Archivo, '        RESULTADOS DE CALCULO DE IMPEDANCIAS EN POR UNIDAD');
+            WriteLn(Archivo, '====================================================================');
+            WriteLn(Archivo, 'Valores Base: ', MvaBase:0:2, ' MVA, ', KvBase:0:2, ' kV');
+            WriteLn(Archivo, '--------------------------------------------------------------------');
+            WriteLn(Archivo, '');
+            WriteLn(Archivo, 'Elemento                                 |    R (p.u.) |    I (p.u.)'); (* CORREGIDO: X -> I *)
+            WriteLn(Archivo, '--------------------------------------------------------------------');
+            FOR i := 1 TO ContadorResultados DO
+            BEGIN
+                Write(Archivo, Resultados[i].TipoElemento:39);
+                Write(Archivo, ' | ', Resultados[i].ImpedanciaPU.R:12:8);
+                WriteLn(Archivo, ' | ', Resultados[i].ImpedanciaPU.I:12:8); (* CORREGIDO: .X -> .I *)
+            END;
+            Close(Archivo);
+            TextColor(Green);
+            WriteLn('Resultados guardados exitosamente en el archivo "', NombreArchivo, '".');
+        END;
+        WriteLn;
+        WriteLn('Presione cualquier tecla para continuar...');
+        ReadKey;
+    END;
+
+BEGIN // Flujo principal de Run_PerUnitCalculator
+    ContadorResultados := 0;
+    MvaBase := 0;
+    KvBase := 0;
+    NombreArchivo := 'ResPU.txt';
+
+    REPEAT
+        ClrScr;
+        Banner;
+        TextColor(Cyan);
+        WriteLn('--- MENU PRINCIPAL DE CALCULOS P.U. ---');
+        TextColor(White);
+        GoToXY(50,5); Write('Valores Base -> ');
+        TextColor(LightGreen); Write('MVA: ', MvaBase:0:2, ' | kV: ', KvBase:0:2); TextColor(White);
+        WriteLn;
+        WriteLn(' B. Establecer Valores Base (MVA, kV)');
+        WriteLn;
+        WriteLn(' --- CALCULAR IMPEDANCIA DE: ---');
+        WriteLn(' 1. Motores o Generadores (> 50HP)');
+        WriteLn(' 2. Motores Agrupados (< 50HP)');
+        WriteLn(' 3. Transformadores');
+        WriteLn(' 4. Cables');
+        WriteLn(' 5. Lineas de Transmision (Simplificado)');
+        WriteLn(' 6. Acometida (Utilidad)');
+        WriteLn(' 7. Reactores');
+        WriteLn;
+        WriteLn(' --- SALIDA DE DATOS ---');
+        WriteLn(' M. Mostrar Resultados en Pantalla');
+        WriteLn(' G. Guardar Resultados en Archivo');
+        WriteLn;
+        WriteLn(' S. Salir al Menu Principal');
+        WriteLn;
+        TextColor(Yellow);
+        Write('Seleccione una opcion: ');
+        TextColor(White);
+        Opcion := UpCase(ReadKey);
+        WriteLn(Opcion);
+
+        IF (Opcion IN ['1'..'7']) AND (MvaBase = 0) THEN
+        BEGIN
+            TextColor(Red);
+            GoToXY(1, 24); Write('ERROR: Primero debe establecer los valores base (Opcion B).');
+            Delay(2000);
+            GoToXY(1, 24); ClrEol;
+        END
+        ELSE
+        CASE Opcion OF
+            'B': EstablecerValoresBase;
+            '1': CalcularMotoresGeneradores;
+            '2': CalcularMotoresMenores50Hp;
+            '3': CalcularTransformadores;
+            '4': CalcularCables;
+            '5': CalcularLineasSimplificado;
+            '6': CalcularAcometida;
+            '7': CalcularReactores;
+            'M': MostrarResultadosEnPantalla;
+            'G': GuardarResultadosEnArchivo;
+            'S': ; // Salir del bucle
+            ELSE
+            BEGIN
+                TextColor(Red);
+                GoToXY(1, 24); Write('Opcion no valida. Intente de nuevo.');
+                Delay(1000);
+                GoToXY(1, 24); ClrEol;
+            END;
+        END;
+
+    UNTIL Opcion = 'S';
+END;
+
+
+(******************************************************************************)
+(* *)
+(* MODULO 2: CALCULADORA DE NUMEROS COMPLEJOS                                 *)
+(* *)
+(******************************************************************************)
+PROCEDURE Run_ComplexCalculator;
+
+VAR
+    opcion : CHAR;
+
+    PROCEDURE LeerComplejo(VAR z: TComplex; num: INTEGER);
+    BEGIN
+        Write('Ingrese el Complejo #', num, ' (Forma a+bi)'); WriteLn;
+        Write('  Parte Real (a): '); ReadLn(z.R);
+        Write('  Parte Imaginaria (b): '); ReadLn(z.I);
+        WriteLn;
+    END;
+
+    PROCEDURE MostrarResultado(z: TComplex);
+    BEGIN
+        TextColor(LightGreen);
+        WriteLn('----------------------------------------');
+        WriteLn('                RESULTADO:');
+        WriteLn('----------------------------------------');
+        TextColor(White);
+        Write(' Forma Binomial: '); C_Print(z, 4); WriteLn;
+        Write(' Forma Polar   : '); C_Print_Polar(z, 4); WriteLn;
+        WriteLn('----------------------------------------');
+        WriteLn;
+        TextColor(Yellow);
+        Write('Presione una tecla para continuar...');
+        ReadKey;
+    END;
+
+    PROCEDURE SumarN;
+    VAR i, n: INTEGER; z, resultado: TComplex;
+    BEGIN
+        ClrScr;
+        DrawHeader('Suma de N Numeros Complejos', Yellow, LightBlue);
+        Write('Cuantos numeros desea sumar?: '); ReadLn(n);
+        WriteLn;
+        resultado := C(0, 0);
+        FOR i := 1 TO n DO
+        BEGIN
+            LeerComplejo(z, i);
+            resultado := C_Add(resultado, z);
+        END;
+        MostrarResultado(resultado);
+    END;
+
+    PROCEDURE RestarN;
+    VAR i, n: INTEGER; z, resultado: TComplex;
+    BEGIN
+        ClrScr;
+        DrawHeader('Resta de N Numeros Complejos', Yellow, LightBlue);
+        Write('Cuantos numeros desea restar?: '); ReadLn(n);
+        WriteLn;
+        IF n > 0 THEN
+        BEGIN
+            LeerComplejo(resultado, 1);
+            FOR i := 2 TO n DO
+            BEGIN
+                LeerComplejo(z, i);
+                resultado := C_Sub(resultado, z);
+            END;
+        END ELSE resultado := C(0, 0);
+        MostrarResultado(resultado);
+    END;
+
+    PROCEDURE DividirN;
+    VAR i, n: INTEGER; z, resultado: TComplex;
+    BEGIN
+        ClrScr;
+        DrawHeader('Division de N Numeros Complejos', Yellow, LightBlue);
+        Write('Cuantos numeros desea dividir?: '); ReadLn(n);
+        WriteLn;
+        IF n > 0 THEN
+        BEGIN
+            LeerComplejo(resultado, 1);
+            FOR i := 2 TO n DO
+            BEGIN
+                LeerComplejo(z, i);
+                resultado := C_Div(resultado, z);
+            END;
+        END ELSE resultado := C(0, 0);
+        MostrarResultado(resultado);
+    END;
+
+    PROCEDURE CalcularZEquivalente;
+    VAR i, n: INTEGER; z, sumaReciprocos, z_eq: TComplex;
+    BEGIN
+        ClrScr;
+        DrawHeader('Calculo de Z-Equivalente (en Paralelo)', Yellow, LightBlue);
+        Write('Cuantas impedancias desea procesar?: '); ReadLn(n);
+        WriteLn;
+        sumaReciprocos := C(0, 0);
+        FOR i := 1 TO n DO
+        BEGIN
+            LeerComplejo(z, i);
+            sumaReciprocos := C_Add(sumaReciprocos, C_Inv(z));
+        END;
+        z_eq := C_Inv(sumaReciprocos);
+        MostrarResultado(z_eq);
+    END;
+
+    PROCEDURE CalcularYEquivalente;
+    VAR i, n: INTEGER; z, y_eq: TComplex;
+    BEGIN
+        ClrScr;
+        DrawHeader('Calculo de Y-Equivalente (Admitancia en Paralelo)', Yellow, LightBlue);
+        Write('Cuantas impedancias desea procesar?: '); ReadLn(n);
+        WriteLn;
+        y_eq := C(0, 0);
+        FOR i := 1 TO n DO
+        BEGIN
+            LeerComplejo(z, i);
+            y_eq := C_Add(y_eq, C_Inv(z));
+        END;
+        MostrarResultado(y_eq);
+    END;
+
+BEGIN // Flujo principal de Run_ComplexCalculator
+    REPEAT
+        ClrScr;
+        TextBackground(DarkGray);
+        TextColor(White);
+        Window(1,1,80,25);
+        ClrScr;
+        DrawBox(20, 4, 62, 18, LightGreen);
+        TextColor(Yellow);
+        GoToXY(25, 6); Write('CALCULADORA DE NUMEROS COMPLEJOS');
+        TextColor(White);
+        GoToXY(23, 9);  Write('1. Sumar N numeros complejos');
+        GoToXY(23, 10); Write('2. Restar N numeros complejos');
+        GoToXY(23, 11); Write('3. Dividir N numeros complejos');
+        GoToXY(23, 12); Write('4. Calcular Z-Equivalente (Paralelo)');
+        GoToXY(23, 13); Write('5. Calcular Y-Equivalente (Admitancia)');
+        TextColor(LightRed);
+        GoToXY(23, 15); Write('S. Salir al Menu Principal');
+        TextColor(Cyan);
+        GoToXY(23, 17); Write('Elija una opcion: ');
+
+        opcion := UpCase(ReadKey);
+        WriteLn; WriteLn;
+        TextBackground(Black); ClrScr;
+        CASE opcion OF
+            '1': SumarN;
+            '2': RestarN;
+            '3': DividirN;
+            '4': CalcularZEquivalente;
+            '5': CalcularYEquivalente;
+        END;
+    UNTIL opcion = 'S';
+    TextBackground(Black);
+    Window(1,1,80,25);
+END;
+
+(******************************************************************************)
+(* *)
+(* MODULO 3: ANALIZADOR DE CORTOCIRCUITO TRIFASICO                            *)
+(* *)
+(******************************************************************************)
+PROCEDURE Run_ShortCircuitAnalyzer;
+
+CONST
+  MaxN = 30;     // Tamaño máximo de la matriz
+  Epsilon = 1E-15; // Un valor pequeño para comparaciones con cero
+
+TYPE
+  Complex = RECORD
+    Re, Im: Real;
+  END;
+
+  Matrix = ARRAY[1..MaxN, 1..MaxN] OF Complex;
+  Vector = ARRAY[1..MaxN] OF Complex;
+  PermutationVector = ARRAY[1..MaxN] OF Integer;
+
+VAR
+  // Matrices principales del sistema
+  Ybus_pos, Ybus_neg, Ybus_cero : Matrix;
+  Zbus_pos, Zbus_neg, Zbus_cero : Matrix;
+
+  // Variables globales del sistema
+  N : Integer; // Dimensión actual del sistema (número de buses)
+  BaseMVA : Real;
+  BaseKV : Real;
+  DatosCargados : Boolean;
+  ZbusCalculadas : Boolean;
+
+  // Variables para la inversion de matrices
+  A, L, U, InvA : Matrix;
+  P : PermutationVector;
+  b, x : Vector;
+  detSign : Real;
+
+  // Variables para almacenar los resultados de la última falla
+  UltimoTipoFalla : STRING[30];
+  UltimoBusFalla : Integer;
+  UltimaCorrienteFalla : Complex;
+  UltimosVoltajesPostFalla : Vector; // Almacena el voltaje de fase 'a' post-falla
+  ResultadosListosParaGuardar : Boolean;
+
+  // Operadores de secuencia
+  Operador_a, Operador_a2 : Complex;
+
+{--------------------------------------------------------------------------}
+{ FUNCIONES PARA ARITMÉTICA DE NÚMEROS COMPLEJOS                           }
+{--------------------------------------------------------------------------}
+FUNCTION Cmplx(r, i: Real): Complex;
+BEGIN
+  Cmplx.Re := r;
+  Cmplx.Im := i;
+END;
+
+FUNCTION C_Add(A, B: Complex): Complex;
+BEGIN
+  C_Add.Re := A.Re + B.Re;
+  C_Add.Im := A.Im + B.Im;
+END;
+
+FUNCTION C_Sub(A, B: Complex): Complex;
+BEGIN
+  C_Sub.Re := A.Re - B.Re;
+  C_Sub.Im := A.Im - B.Im;
+END;
+
+FUNCTION C_Mul(A, B: Complex): Complex;
+VAR
+  Resultado: Complex;
+BEGIN
+  Resultado.Re := A.Re * B.Re - A.Im * B.Im;
+  Resultado.Im := A.Re * B.Im + A.Im * B.Re;
+  C_Mul := Resultado;
+END;
+
+FUNCTION C_Abs(A: Complex): Real;
+BEGIN
+  C_Abs := Sqrt(A.Re * A.Re + A.Im * A.Im);
+END;
+
+FUNCTION C_Angle_Deg(A: Complex): Real;
+VAR
+  AngleRad: Real;
+BEGIN
+  IF Abs(A.Re) < Epsilon THEN
+  BEGIN
+    IF Abs(A.Im) < Epsilon THEN AngleRad := 0.0
+    ELSE IF A.Im > 0 THEN AngleRad := Pi / 2.0
+    ELSE AngleRad := -Pi / 2.0;
+  END
+  ELSE
+  BEGIN
+    AngleRad := ArcTan(A.Im / A.Re);
+    IF (A.Re < 0) THEN AngleRad := AngleRad + Pi;
+  END;
+  C_Angle_Deg := AngleRad * 180.0 / Pi;
+END;
+
+FUNCTION C_Inv(A: Complex): Complex;
+VAR
+  Denom: Real;
+  Resultado: Complex;
+BEGIN
+  Denom := A.Re * A.Re + A.Im * A.Im;
+  IF Denom < Epsilon THEN
+  BEGIN
+    WriteLn('Error: Division compleja por cero en C_Inv.');
+    Resultado.Re := 1E20;
+    Resultado.Im := 1E20;
+    C_Inv := Resultado;
+    HALT;
+  END
+  ELSE
+  BEGIN
+    Resultado.Re := A.Re / Denom;
+    Resultado.Im := -A.Im / Denom;
+    C_Inv := Resultado;
+  END;
+END;
+
+FUNCTION C_Div(A, B: Complex): Complex;
+BEGIN
+  C_Div := C_Mul(A, C_Inv(B));
+END;
+
+PROCEDURE ImprimirComplejo(C: Complex; Decimales: Integer);
+BEGIN
+  Write(C.Re:0:Decimales);
+  IF C.Im >= 0 THEN Write(' +j') ELSE Write(' -j');
+  Write(Abs(C.Im):0:Decimales);
+END;
+
+PROCEDURE ImprimirComplejoPolar(C: Complex; Decimales: Integer);
+BEGIN
+  Write(C_Abs(C):0:Decimales, ' < ', C_Angle_Deg(C):0:Decimales, ' deg');
+END;
+
+
+{--------------------------------------------------------------------------}
+{ PROCEDIMIENTOS PARA MANEJO DE MATRICES Y VECTORES                        }
+{--------------------------------------------------------------------------}
+PROCEDURE PrintMatrix(VAR M: Matrix; Dim: Integer; Name: String);
+VAR i, j: Integer;
+BEGIN
+  WriteLn;
+  WriteLn('Matriz ', Name, ':');
+  FOR i := 1 TO Dim DO
+  BEGIN
+    FOR j := 1 TO Dim DO
+    BEGIN
+      ImprimirComplejo(M[i,j], 4);
+      Write('       ');
+    END;
+    WriteLn;
+  END;
+  WriteLn;
+END;
+
+PROCEDURE InitializePermutation(VAR pVec: PermutationVector; Dim: Integer);
+VAR i: Integer;
+BEGIN
+  FOR i := 1 TO Dim DO
+    pVec[i] := i;
+END;
+
+PROCEDURE SwapRows(VAR M: Matrix; r1, r2: Integer; Dim: Integer);
+VAR j: Integer;
+    temp: Complex;
+BEGIN
+  IF r1 <> r2 THEN
+  BEGIN
+    FOR j := 1 TO Dim DO
+    BEGIN
+      temp := M[r1, j];
+      M[r1, j] := M[r2, j];
+      M[r2, j] := temp;
+    END;
+  END;
+END;
+
+PROCEDURE SwapPermutation(VAR pVec: PermutationVector; r1, r2: Integer);
+VAR temp: Integer;
+BEGIN
+  IF r1 <> r2 THEN
+  BEGIN
+    temp := pVec[r1];
+    pVec[r1] := pVec[r2];
+    pVec[r2] := temp;
+  END;
+END;
+
+{--------------------------------------------------------------------------}
+{ FACTORIZACIÓN LU CON PIVOTEO PARCIAL (PA = LU)                           }
+{--------------------------------------------------------------------------}
+FUNCTION LUDecomposition(VAR A_LU: Matrix; VAR pVec: PermutationVector; Dim: Integer; VAR sign: Real): Boolean;
+VAR
+  i, j, k, pivotRow: Integer;
+  maxVal: Real;
+  factor: Complex;
+BEGIN
+  sign := 1.0;
+  InitializePermutation(pVec, Dim);
+  FOR k := 1 TO Dim DO
+  BEGIN
+    maxVal := 0.0;
+    pivotRow := k;
+    FOR i := k TO Dim DO
+    BEGIN
+      IF C_Abs(A_LU[i, k]) > maxVal THEN
+      BEGIN
+        maxVal := C_Abs(A_LU[i, k]);
+        pivotRow := i;
+      END;
+    END;
+
+    IF maxVal < Epsilon THEN
+    BEGIN
+      WriteLn('Error: Matriz singular detectada durante la descomposicion LU.');
+      LUDecomposition := FALSE;
+      Exit;
+    END;
+
+    IF pivotRow <> k THEN
+    BEGIN
+      SwapRows(A_LU, k, pivotRow, Dim);
+      SwapPermutation(pVec, k, pivotRow);
+      sign := -sign;
+    END;
+
+    FOR i := k + 1 TO Dim DO
+    BEGIN
+      factor := C_Div(A_LU[i, k], A_LU[k, k]);
+      A_LU[i, k] := factor;
+      FOR j := k + 1 TO Dim DO
+      BEGIN
+        A_LU[i, j] := C_Sub(A_LU[i, j], C_Mul(factor, A_LU[k, j]));
+      END;
+    END;
+  END;
+  LUDecomposition := TRUE;
+END;
+
+{--------------------------------------------------------------------------}
+{ RESOLUCIÓN DE SISTEMAS TRIANGULARES                                      }
+{--------------------------------------------------------------------------}
+PROCEDURE ForwardSubstitution(VAR LU: Matrix; VAR b_perm: Vector; VAR y: Vector; Dim: Integer);
+VAR i, j: Integer;
+    sum: Complex;
+BEGIN
+  FOR i := 1 TO Dim DO
+  BEGIN
+    sum := Cmplx(0,0);
+    FOR j := 1 TO i - 1 DO
+    BEGIN
+      sum := C_Add(sum, C_Mul(LU[i, j], y[j]));
+    END;
+    y[i] := C_Sub(b_perm[i], sum);
+  END;
+END;
+
+PROCEDURE BackwardSubstitution(VAR LU: Matrix; VAR y: Vector; VAR x_sol: Vector; Dim: Integer);
+VAR i, j: Integer;
+    sum: Complex;
+BEGIN
+  FOR i := Dim DOWNTO 1 DO
+  BEGIN
+    sum := Cmplx(0,0);
+    FOR j := i + 1 TO Dim DO
+    BEGIN
+      sum := C_Add(sum, C_Mul(LU[i, j], x_sol[j]));
+    END;
+    IF C_Abs(LU[i,i]) < Epsilon THEN
+    BEGIN
+      WriteLn('Error: Division por cero en BackwardSubstitution.');
+      Halt;
+    END;
+    x_sol[i] := C_Div(C_Sub(y[i], sum), LU[i, i]);
+  END;
+END;
+
+{--------------------------------------------------------------------------}
+{ INVERSIÓN DE LA MATRIZ USANDO FACTORIZACIÓN LU                           }
+{--------------------------------------------------------------------------}
+FUNCTION InvertMatrix(VAR A_orig: Matrix; VAR A_inv: Matrix; Dim: Integer): Boolean;
+VAR
+  LU_Fact: Matrix;
+  p_Vec: PermutationVector;
+  identity_col, perm_identity_col, y_sol, inv_col: Vector;
+  i, j, k: Integer;
+  success: Boolean;
+  s: Real;
+BEGIN
+  LU_Fact := A_orig;
+  success := LUDecomposition(LU_Fact, p_Vec, Dim, s);
+  IF NOT success THEN
+  BEGIN
+    WriteLn('No se pudo calcular la inversa: la matriz es singular.');
+    InvertMatrix := FALSE;
+    Exit;
+  END;
+
+  FOR j := 1 TO Dim DO
+  BEGIN
+    FOR i := 1 TO Dim DO
+    BEGIN
+      IF i = j THEN
+        identity_col[i] := Cmplx(1,0)
+      ELSE
+        identity_col[i] := Cmplx(0,0);
+    END;
+
+    FOR k := 1 TO Dim DO
+      perm_identity_col[k] := identity_col[p_Vec[k]];
+
+    ForwardSubstitution(LU_Fact, perm_identity_col, y_sol, Dim);
+    BackwardSubstitution(LU_Fact, y_sol, inv_col, Dim);
+
+    FOR i := 1 TO Dim DO
+      A_inv[i, j] := inv_col[i];
+  END;
+  InvertMatrix := TRUE;
+END;
+
+{--------------------------------------------------------------------------}
+{ LÓGICA PRINCIPAL DE CÁLCULOS DEL SISTEMA                                 }
+{--------------------------------------------------------------------------}
+
+PROCEDURE InicializarValores;
+BEGIN
+  // Operador a = 1 < 120 deg = -0.5 + j0.8660
+  Operador_a.Re := -0.5;
+  Operador_a.Im := Sqrt(3)/2.0;
+
+  // Operador a^2 = 1 < 240 deg = -0.5 - j0.8660
+  Operador_a2.Re := -0.5;
+  Operador_a2.Im := -Sqrt(3)/2.0;
+
+  DatosCargados := False;
+  ZbusCalculadas := False;
+  ResultadosListosParaGuardar := False;
+END;
+
+PROCEDURE CargarMatricesYbus;
+VAR
+  i, j: Integer;
+  tempRe, tempIm: Real; // **CORRECCIÓN**: Variables temporales para lectura
+BEGIN
+  ClrScr;
+  TextColor(Yellow);
+  WriteLn('--- CARGA DE DATOS DEL SISTEMA ---');
+  TextColor(White);
+  Write('Ingrese la dimension del sistema (numero de buses, max ', MaxN, '): ');
+  ReadLn(N);
+
+  IF (N <= 0) OR (N > MaxN) THEN
+  BEGIN
+    WriteLn('Dimension invalida. Programa terminado.');
+    Halt;
+  END;
+
+  WriteLn;
+  TextColor(LightGreen);
+  WriteLn('Ingrese los elementos de la MATRIZ DE ADMITANCIA DE SECUENCIA POSITIVA (Ybus+):');
+  TextColor(White);
+  WriteLn('Para cada elemento Y[i,j], ingrese: ParteReal ParteImaginaria');
+  FOR i := 1 TO N DO
+  BEGIN
+    FOR j := 1 TO N DO
+    BEGIN
+      Write('Y_pos[', i, ',', j, ']: ');
+      ReadLn(tempRe, tempIm); // **CORRECCIÓN**: Leer en variables temporales
+      Ybus_pos[i,j].Re := tempRe;
+      Ybus_pos[i,j].Im := tempIm;
+    END;
+  END;
+
+  // Se asume que la matriz de secuencia negativa es igual a la positiva
+  Ybus_neg := Ybus_pos;
+  WriteLn('Matriz de secuencia negativa (Ybus-) asumida igual a la positiva.');
+  PrintMatrix(Ybus_pos, N, 'Ybus de Secuencia Positiva');
+  ReadKey;
+
+  WriteLn;
+  TextColor(LightGreen);
+  WriteLn('Ingrese los elementos de la MATRIZ DE ADMITANCIA DE SECUENCIA CERO (Ybus_0):');
+  TextColor(White);
+  FOR i := 1 TO N DO
+  BEGIN
+    FOR j := 1 TO N DO
+    BEGIN
+      Write('Y_cero[', i, ',', j, ']: ');
+      ReadLn(tempRe, tempIm); // **CORRECCIÓN**: Leer en variables temporales
+      Ybus_cero[i,j].Re := tempRe;
+      Ybus_cero[i,j].Im := tempIm;
+    END;
+  END;
+  PrintMatrix(Ybus_cero, N, 'Ybus de Secuencia Cero');
+
+  DatosCargados := True;
+  ZbusCalculadas := False; // Se deben recalcular si se cargan nuevos datos
+
+  WriteLn('Datos cargados exitosamente. Presione una tecla...');
+  ReadKey;
+END;
+
+PROCEDURE CalcularMatricesZbus;
+VAR Ok: Boolean;
+BEGIN
+  ClrScr;
+  IF NOT DatosCargados THEN
+  BEGIN
+    WriteLn('Error: Debe cargar los datos del sistema (Ybus) primero.');
+    ReadKey;
+    Exit;
+  END;
+
+  WriteLn('--- CALCULANDO MATRICES DE IMPEDANCIA (Zbus) ---');
+
+  WriteLn('Calculando Zbus positiva...');
+  Ok := InvertMatrix(Ybus_pos, Zbus_pos, N);
+  IF NOT Ok THEN
+  BEGIN
+      WriteLn('Fallo al invertir Ybus positiva. Abortando.');
+      ReadKey;
+      Exit;
+  END
+  ELSE
+      WriteLn('Zbus positiva calculada.');
+
+  WriteLn('Calculando Zbus negativa...');
+  Ok := InvertMatrix(Ybus_neg, Zbus_neg, N);
+  IF NOT Ok THEN
+  BEGIN
+      WriteLn('Fallo al invertir Ybus negativa. Abortando.');
+      ReadKey;
+      Exit;
+  END
+  ELSE
+      WriteLn('Zbus negativa calculada.');
+
+
+  WriteLn('Calculando Zbus cero...');
+  Ok := InvertMatrix(Ybus_cero, Zbus_cero, N);
+  IF NOT Ok THEN
+  BEGIN
+    WriteLn('Fallo al invertir Ybus cero. Abortando.');
+    ReadKey;
+    Exit;
+  END
+  ELSE
+    WriteLn('Zbus cero calculada.');
+
+  ZbusCalculadas := True;
+
+  WriteLn('Todas las matrices Zbus han sido calculadas. Presione una tecla...');
+  ReadKey;
+END;
+
+PROCEDURE CalcularYMostrarCorrienteReal(If_pu: Complex);
+VAR
+  Opcion: Char;
+  Ibase, Ireal_kA: Real;
+BEGIN
+  WriteLn;
+  TextColor(Cyan);
+  Write('Desea calcular la corriente real en kiloamperes (kA)? (S/N): ');
+  Opcion := UpCase(ReadKey);
+  WriteLn(Opcion);
+  TextColor(White);
+
+  IF Opcion = 'S' THEN
+  BEGIN
+    Write('Ingrese la Potencia Base del sistema (MVA): ');
+    ReadLn(BaseMVA);
+    Write('Ingrese el Voltaje Base del bus de falla (kV): ');
+    ReadLn(BaseKV);
+
+    IF (BaseMVA <= 0) OR (BaseKV <= 0) THEN
+    BEGIN
+      WriteLn('Valores base invalidos.');
+      Exit;
+    END;
+
+    // I_base (kA) = MVA_base / (sqrt(3) * kV_base)
+    Ibase := BaseMVA / (Sqrt(3) * BaseKV);
+    Ireal_kA := C_Abs(If_pu) * Ibase;
+
+    TextColor(Yellow);
+    WriteLn('---------------------------------------------');
+    WriteLn('Corriente Base (I_base): ', Ibase:0:4, ' kA');
+    WriteLn('Corriente de Falla Real: ', Ireal_kA:0:4, ' kA');
+    WriteLn('---------------------------------------------');
+    TextColor(White);
+  END;
+END;
+
+
+PROCEDURE CalcularFallaTrifasica;
+VAR
+  Vf_prefalla : Complex;
+  If_3ph : Complex;
+  Zkk_pos : Complex;
+  VoltajesPostFalla : Vector;
+  i, BusFalla: Integer;
+BEGIN
+  ResultadosListosParaGuardar := False;
+
+  IF NOT ZbusCalculadas THEN
+  BEGIN
+      WriteLn('Error: Debe calcular las matrices Zbus primero.');
+      ReadKey;
+      Exit;
+  END;
+
+  Write('Ingrese el numero del bus a fallar (1-', N, '): ');
+  ReadLn(BusFalla);
+
+  IF (BusFalla < 1) OR (BusFalla > N) THEN
+  BEGIN
+    WriteLn('Numero de bus de falla invalido.');
+    Exit;
+  END;
+
+  Vf_prefalla := Cmplx(1.0, 0.0);
+  Zkk_pos := Zbus_pos[BusFalla, BusFalla];
+
+  IF C_Abs(Zkk_pos) < Epsilon THEN
+  BEGIN
+    WriteLn('Error: Zbus_pos[k,k] es cero. Division por cero.');
+    Exit;
+  END;
+
+  If_3ph := C_Div(Vf_prefalla, Zkk_pos);
+  UltimaCorrienteFalla := If_3ph;
+  UltimoBusFalla := BusFalla;
+  UltimoTipoFalla := 'Trifasica Simetrica';
+
+  ClrScr;
+  TextColor(Yellow);
+  WriteLn('--- Resultados Falla Trifasica en Bus ', BusFalla, ' ---');
+  TextColor(White);
+  Write('Corriente de Falla Total (If) en p.u.: ');
+  ImprimirComplejoPolar(If_3ph, 4);
+  Write(' | Rectangular: ');
+  ImprimirComplejo(If_3ph, 4);
+  WriteLn;
+
+  CalcularYMostrarCorrienteReal(If_3ph);
+
+  WriteLn;
+  WriteLn('Voltajes Post-Falla en buses (p.u.):');
+  FOR i := 1 TO N DO
+  BEGIN
+    // La fórmula es V_i(post) = V_i(pre) - Z_ik * I_falla_k
+    // Asumiendo V_i(pre) = 1.0 para todos los buses.
+    VoltajesPostFalla[i] := C_Sub(Vf_prefalla, C_Mul(Zbus_pos[i,BusFalla], If_3ph));
+
+    // Guardar el resultado para la función de guardar en archivo
+    UltimosVoltajesPostFalla[i] := VoltajesPostFalla[i];
+
+    Write('  Bus ', i, ': ');
+    ImprimirComplejoPolar(VoltajesPostFalla[i], 4);
+    WriteLn;
+  END;
+
+  ResultadosListosParaGuardar := True;
+  WriteLn;
+  WriteLn('Calculo completado. Presione una tecla para volver al menu...');
+  ReadKey;
+END;
+
+PROCEDURE CalcularFallaLineaTierra;
+VAR
+  BusFalla: Integer;
+  Vf_prefalla: Complex;
+  Zkk_pos, Zkk_neg, Zkk_cero, Z_total_sec: Complex;
+  Ia1, Ia2, Ia0, If_LG: Complex;
+  Vi_pos, Vi_neg, Vi_cero, Via_post: Complex;
+  i: Integer;
+BEGIN
+  ResultadosListosParaGuardar := False;
+
+  IF NOT ZbusCalculadas THEN
+  BEGIN
+    WriteLn('Error: Debe calcular las matrices Zbus primero.');
+    ReadKey;
+    Exit;
+  END;
+
+  Write('Ingrese el numero del bus a fallar (1-', N, '): ');
+  ReadLn(BusFalla);
+
+  IF (BusFalla < 1) OR (BusFalla > N) THEN
+  BEGIN
+    WriteLn('Numero de bus de falla invalido.');
+    Exit;
+  END;
+
+  // Voltaje pre-falla es 1.0 p.u.
+  Vf_prefalla := Cmplx(1.0, 0.0);
+
+  // Obtener las impedancias de la diagonal de Zbus para el bus fallado
+  Zkk_pos := Zbus_pos[BusFalla, BusFalla];
+  Zkk_neg := Zbus_neg[BusFalla, BusFalla];
+  Zkk_cero := Zbus_cero[BusFalla, BusFalla];
+
+  // Las redes de secuencia se conectan en serie: Z_total = Z1+Z2+Z0
+  Z_total_sec := C_Add(Zkk_pos, C_Add(Zkk_neg, Zkk_cero));
+
+  IF C_Abs(Z_total_sec) < Epsilon THEN
+  BEGIN
+    WriteLn('Error: La impedancia total de secuencia es cero. Division por cero.');
+    Exit;
+  END;
+
+  // Calcular corrientes de secuencia: Ia1 = Ia2 = Ia0 = Vpre / Z_total
+  Ia1 := C_Div(Vf_prefalla, Z_total_sec);
+  Ia2 := Ia1;
+  Ia0 := Ia1;
+
+  // La corriente de falla a tierra es If = 3 * Ia0
+  If_LG := C_Mul(Cmplx(3.0, 0.0), Ia0);
+
+  // Almacenar resultados para la función de guardar
+  UltimaCorrienteFalla := If_LG;
+  UltimoBusFalla := BusFalla;
+  UltimoTipoFalla := 'Linea a Tierra (Monofasica)';
+
+  ClrScr;
+  TextColor(Yellow);
+  WriteLn('--- Resultados Falla Linea-Tierra en Bus ', BusFalla, ' ---');
+  TextColor(White);
+  WriteLn;
+  Write('Corriente de Falla a Tierra (If) en p.u.: ');
+  ImprimirComplejoPolar(If_LG, 4);
+  Write(' | Rectangular: ');
+  ImprimirComplejo(If_LG, 4);
+  WriteLn;
+
+  WriteLn;
+  WriteLn('Corrientes de Secuencia en el Bus de Falla (p.u.):');
+  Write('  I_a1: '); ImprimirComplejoPolar(Ia1, 4); WriteLn;
+  Write('  I_a2: '); ImprimirComplejoPolar(Ia2, 4); WriteLn;
+  Write('  I_a0: '); ImprimirComplejoPolar(Ia0, 4); WriteLn;
+
+  CalcularYMostrarCorrienteReal(If_LG);
+
+  WriteLn;
+  WriteLn('Voltajes de Fase A Post-Falla en buses (p.u.):');
+  FOR i := 1 TO N DO
+  BEGIN
+    // Calcular voltajes de secuencia en cada bus i
+    // V_i1 = Vpre_i - Z_ik1 * I_k1
+    // V_i2 = 0        - Z_ik2 * I_k2
+    // V_i0 = 0        - Z_ik0 * I_k0
+    Vi_pos := C_Sub(Vf_prefalla, C_Mul(Zbus_pos[i, BusFalla], Ia1));
+    Vi_neg := C_Mul(Cmplx(-1.0, 0.0), C_Mul(Zbus_neg[i, BusFalla], Ia2));
+    Vi_cero := C_Mul(Cmplx(-1.0, 0.0), C_Mul(Zbus_cero[i, BusFalla], Ia0));
+
+    // Calcular voltaje de fase 'a' post-falla: V_ia = V_i1 + V_i2 + V_i0
+    Via_post := C_Add(Vi_pos, C_Add(Vi_neg, Vi_cero));
+
+    // Guardar el resultado para la función de guardar en archivo
+    UltimosVoltajesPostFalla[i] := Via_post;
+
+    Write('  Bus ', i, ': ');
+    ImprimirComplejoPolar(Via_post, 4);
+    WriteLn;
+  END;
+
+  ResultadosListosParaGuardar := True;
+  WriteLn;
+  WriteLn('Calculo completado. Presione una tecla para volver al menu...');
+  ReadKey;
+END;
+
+PROCEDURE GuardarUltimoResultado;
+VAR
+  Reporte: Text;
+  NombreArchivo: STRING;
+  i: Integer;
+BEGIN
+  ClrScr;
+  IF NOT ResultadosListosParaGuardar THEN
+  BEGIN
+    TextColor(Red);
+    WriteLn('No hay resultados recientes para guardar.');
+    WriteLn('Por favor, ejecute primero una simulacion de falla.');
+    TextColor(White);
+    ReadKey;
+    Exit;
+  END;
+
+  TextColor(Yellow);
+  WriteLn('--- GUARDAR REPORTE DE FALLA ---');
+  TextColor(White);
+  Write('Ingrese el nombre del archivo (ej: reporte.txt): ');
+  ReadLn(NombreArchivo);
+
+  IF Length(NombreArchivo) = 0 THEN
+  BEGIN
+    WriteLn('Nombre de archivo invalido. Operacion cancelada.');
+    ReadKey;
+    Exit;
+  END;
+
+  Assign(Reporte, NombreArchivo);
+  Rewrite(Reporte); // Crea un nuevo archivo o sobrescribe si existe
+
+  WriteLn('Guardando reporte en ', NombreArchivo, '...');
+
+  // Escribir cabecera en el archivo
+  WriteLn(Reporte, '==================================================');
+  WriteLn(Reporte, '      REPORTE DE ANALISIS DE CORTOCIRCUITO');
+  WriteLn(Reporte, '==================================================');
+  WriteLn(Reporte);
+  WriteLn(Reporte, 'Tipo de Falla: ', UltimoTipoFalla);
+  WriteLn(Reporte, 'Bus de Falla:  ', UltimoBusFalla);
+  WriteLn(Reporte, '--------------------------------------------------');
+  WriteLn(Reporte);
+
+  // Escribir corriente de falla
+  WriteLn(Reporte, 'CORRIENTE DE FALLA TOTAL (en p.u.)');
+  Write(Reporte, '  - Polar:        ');
+  Write(Reporte, C_Abs(UltimaCorrienteFalla):0:5, ' < ');
+  WriteLn(Reporte, C_Angle_Deg(UltimaCorrienteFalla):0:5, ' grados');
+  Write(Reporte, '  - Rectangular: ');
+  Write(Reporte, UltimaCorrienteFalla.Re:0:5);
+  IF UltimaCorrienteFalla.Im >= 0 THEN Write(Reporte, ' + j') ELSE Write(Reporte, ' - j');
+  WriteLn(Reporte, Abs(UltimaCorrienteFalla.Im):0:5);
+  WriteLn(Reporte);
+
+  // Escribir voltajes post-falla
+  WriteLn(Reporte, 'VOLTAJES POST-FALLA (Fase A en p.u.)');
+  WriteLn(Reporte, '--------------------------------------------------');
+  FOR i := 1 TO N DO
+  BEGIN
+    Write(Reporte, 'Bus ', i, ':');
+    // Alinear la salida para mejor legibilidad
+    IF i < 10 THEN Write(Reporte, '  ') ELSE Write(Reporte, ' ');
+    Write(Reporte, C_Abs(UltimosVoltajesPostFalla[i]):0:5, ' < ');
+    Write(Reporte, C_Angle_Deg(UltimosVoltajesPostFalla[i]):0:5, ' grados');
+    WriteLn(Reporte);
+  END;
+  WriteLn(Reporte, '--------------------------------------------------');
+  WriteLn(Reporte);
+  WriteLn(Reporte, 'Fin del reporte.');
+
+  Close(Reporte);
+
+  TextColor(LightGreen);
+  WriteLn('Reporte guardado exitosamente en "', NombreArchivo, '".');
+  TextColor(White);
+  WriteLn('Presione una tecla para continuar...');
+  ReadKey;
+END;
+
+PROCEDURE MostrarMenu;
+BEGIN
+    ClrScr;
+    TextColor(Cyan);
+    WriteLn('==============================================');
+    WriteLn('        ANALIZADOR DE CORTOCIRCUITO   ');
+    WriteLn('==============================================');
+    TextColor(White);
+    WriteLn('1. Cargar Datos del Sistema (Matrices Ybus)');
+    WriteLn('2. Calcular Matrices Zbus (Inversion de Ybus)');
+    WriteLn('3. Simular Falla Trifasica');
+    WriteLn('4. Simular Falla Linea-Tierra');
+    WriteLn('5. Guardar Ultimo Resultado');
+    WriteLn;
+    TextColor(Red);
+    WriteLn('0. Salir');
+    TextColor(White);
+    WriteLn('==============================================');
+    Write('Seleccione una opcion: ');
+END;
+
+{--------------------------------------------------------------------------}
+{ BLOQUE PRINCIPAL DEL PROGRAMA                                            }
+{--------------------------------------------------------------------------}
+VAR
+  Opcion: Char;
+  Salir: Boolean;
+
+BEGIN
+  InicializarValores;
+  Salir := False;
+
+  REPEAT
+    MostrarMenu;
+    Opcion := ReadKey;
+    WriteLn(Opcion);
+
+    CASE Opcion OF
+      '1': CargarMatricesYbus;
+      '2': CalcularMatricesZbus;
+      '3': CalcularFallaTrifasica;
+      '4': CalcularFallaLineaTierra;
+      '5': GuardarUltimoResultado;
+      '0': Salir := True;
+    ELSE
+      WriteLn('Opcion invalida. Presione una tecla...');
+      ReadKey;
+    END;
+
+  UNTIL Salir;
+
+  TextColor(LightGray);
+  WriteLn;
+  WriteLn('Programa finalizado.');
+
+END;
+
+(******************************************************************************)
+(* *)
+(* MODULO 4: ANALIZADOR DE FLUJO DE POTENCIA                                  *)
+(* *)
+(******************************************************************************)
+PROCEDURE Run_PowerFlowAnalyzer;
+
+const
+        maxiter_newton = 30;
+        maxiter_gauss = 250;
+        maxbus = 25;
+        maxline = 80;
+        maxgen = 20;
+        maxtran = 10;
+        max_mismatch_newton = 0.00001;
+        max_volterror_gauss = 0.00001;
+        ioval : integer = 0;
+        ioerr : boolean = false;
+        dpr : real = 57.29577951;
+
+type
+        bustype_label = ( load, gen_reg, gen_highvar, gen_lowvar, swing );
+        busnametype = string[8];
+        lntype = string[4];
+        complex = record              {crea una entidad compleja}
+                    r,i:real;
+                    end;
+        polar = record                {crea una entidad para presentacion polar}
+                    m,a:real;
+                    end;
+        bustable_real = array [1..maxbus] of real;
+        bustable_bustype = array [1..maxbus] of bustype_label;
+        bustable_string = array [1..maxbus] of string[8];
+        bustable_integer = array [1..maxbus] of integer;
+        bustable_complex = array [1..maxbus] of complex;
+        bustable_polar = array [1..maxbus] of polar;
+        bustable_square_real = array [1..maxbus] of bustable_real;
+        bustable_square_complex = array [1..maxbus] of bustable_complex;
+        gentable_real = array [1..maxgen] of real;
+        gentable_integer = array [1..maxgen] of integer;
+        linetable_real = array [1..maxline] of real;
+        linetable_integer = array [1..maxline] of integer;
+        linetable_lntype = array [1..maxline] of lntype;
+        trantable_real = array [1..maxtran] of real;
+        trantable_integer = array [1..maxtran] of integer;
+var
+        i,iter,
+        linenumber,
+        numbuses,
+        numlines,
+        numlines_dbl,
+        numgen,
+        numtran,
+        swingbus
+                 : integer;
+        potbase: real;
+        no_var_limiting : boolean;
+        zero : complex;
+{asignacion a archivos de entrada y salida}
+        filename : string[ 25 ];
+        inputfile,outfile : text;
+        inputchar : char;
+        output_device : string[7];
+        title1, title2, title3, title4, title5, title6,
+        title7, title8, title9, title10, title11, title12, title13: string[100];
+{ asignaciones de vectores}
+        ec,cn : bustable_complex;
+        ep : bustable_polar;
+        dele,delang,
+        delp,delq,
+        pload,qload,
+        p_sched_inj, q_sched_inj,
+        p_net_inj, q_net_inj,
+        volt_low_limit,
+        volt_high_limit,
+        volt_base,
+        amp_base
+                           : bustable_real;
+        bustype : bustable_bustype;
+        busname : bustable_string;
+        buspointer : bustable_integer;
+        dpdt,dpde,dqdt,dqde : bustable_square_real;
+        y : bustable_square_complex;
+        pgen,qgen,
+        qmax, qmin,
+        vsched
+            : gentable_real;
+
+        genbusno : gentable_integer;
+        frombus, tobus,
+        tran_pointer
+            : linetable_integer;
+        r,x,bcap,
+        linelimit,pflow,qflow
+            : linetable_real;
+        linetype : linetable_lntype;
+        tapbus, nontapbus : trantable_integer;
+        tapratio : trantable_real;
+label quit;
+{-----------------------------------------------------------------}
+procedure cadd(var c:complex; a,b:complex);     {sumar complejos}
+begin { cadd }
+  c.r := a.r + b.r;
+  c.i := a.i + b.i;
+end; { cadd }
+{------------------------------------------------------------------}
+procedure csub(var c:complex; a,b:complex);     {restar complejos}
+begin { csub }
+  c.r := a.r - b.r;
+  c.i := a.i - b.i;
+end; { csub }
+{--------------------------------------------------------------------}
+procedure conj(var c:complex; a:complex);       {conjuncion complejos}
+begin { conj }
+  c.r := a.r;
+  c.i := -a.i;
+end; { conj }
+{-----------------------------------------------------------------------}
+procedure cmult(var c:complex; a,b:complex);     {multiplicacion complejos}
+begin { cmult }
+  c.r := a.r * b.r - a.i * b.i;
+  c.i := a.r * b.i + a.i * b.r;
+end; { cmult }
+{----------------------------------------------------------------------}
+procedure scale(var c:complex; a:real; b:complex);
+begin { scale }
+  c.r := a * b.r;                               {                     }
+  c.i := a * b.i;
+end; { scale }
+{--------------------------------------------------------------------}
+procedure cdiv(var c:complex; a,b:complex);      {division complejos}
+var
+    rbmag2:real;
+begin { cdiv }
+  rbmag2 := 1.0 / (b.r * b.r + b.i * b.i);
+  c.r := rbmag2 * (a.r * b.r + a.i * b.i);
+  c.i := rbmag2 * (b.r * a.i - a.r * b.i);
+end; { cdiv }
+{------------------------------------------------------------------------}
+procedure cmag( var c:real; a:complex );         {magnitud de un numero imaginario}
+begin
+    c := sqrt( a.r * a.r  +  a.i * a.i );
+end;
+{-------------------------------------------------------------------------}
+procedure cart_to_polar(var c:polar; a:complex);  {transforma de complejos a polar}
+begin
+  c.m := sqrt(a.r * a.r + a.i * a.i);
+  c.a := arctan(a.i / a.r);
+end; { cart_to_polar }
+{-----------------------------------------------------------------------}
+procedure polar_to_cart(var c:complex; a:polar);  {transforma de polar a complejos}
+begin
+  c.r := a.m * cos(a.a);
+  c.i := a.m * sin(a.a);
+end; { polar_to_cart }
+{--------------------------------------------------------------------------}
+procedure factor_potencia(var c:real; a,b:real);  {calcular factor de potencia}
+begin
+   c := b/a
+end; { factor_potencia }
+
+
+
+
+{----------------------------------------------------------------------------}
+{$I-,R-}
+{ <f> <s>    IO Check routine }
+procedure iocheck(linenumber:integer);
+
+      { esta rutina compara IOErr igual al IOresul, entonces establece la correspondiente
+        IOFlag.  tambien imprime un mensaje en la 24th linea de la pantalla}
+var
+  Ch    : Char;
+begin
+  IOVal := IOresult;
+  IOErr := (IOVal <> 0);
+  GotoXY(1,24); ClrEol;        { Clear error line in any case }
+  if IOErr then begin
+    Write(Chr(7));
+    case IOVal of
+        2  :  Writeln('             REVISA BIEN!!!, ESTA MAL ESCRITO EL ARCHIVO!!!');
+      106  :  Writeln('             tienes un error en formato numerico!!! ');
+    else        Writeln('             error desconocico I/O:  ',IOVal:3)
+    end;
+    textcolor (4); {rojo}
+    writeln( '/////error de la linea ', linenumber, ' del archivo de entrada '         );
+    writeln( '/////advertencia! no trates de correr el programa, corrige el archivo'    );
+    writeln( '/////y ya corregido, retorna a un nuevo caso accediendo a la opcion (5)');
+    textcolor (7); {gris claro}
+    writeln( '           teclea cualquier tecla para continuar...');
+readkey;
+ClrScr;
+  end
+end; { final del procedimiento IOCheck }
+
+
+
+{----------------------------------------------------------------------------}
+procedure sumoffdia(var soffdia:complex; fbus:integer);
+    { suma el voltaje de bus a la rama de admitancia para cada rama     }
+    { conectada desde el bus fbus. El resultado es almacenado en soffdia}
+var
+    tbus:integer;
+    yline,offdia:complex;
+begin { sumoffdia }
+  soffdia.r := 0.0;
+  soffdia.i := 0.0;
+  for tbus := 1 to numbuses do if fbus <> tbus then
+    begin
+    yline := y[fbus,tbus];
+    if (yline.r <> 0) or (yline.i <> 0) then
+      begin
+      cmult(offdia,ec[tbus],yline);         {llamados}
+      cadd(soffdia,soffdia,offdia);         {llamados}
+      end;
+    end;
+end; { sumoffdia }
+{----------------------------------------------------------------------------}
+procedure datainput;
+{esta rutina genera datos de entrada y construye la Ybus}
+var
+    i,j,k,busno : integer;
+    temp_frombus, temp_tobus, temp_tran_pointer : linetable_integer;
+    temp_r, temp_x, temp_bcap, temp_linelimit : linetable_real;
+    temp_linetype : linetable_lntype;
+    z,gline,bline:real;
+label quit;
+begin
+        linenumber := 0;
+        textcolor (3); {verde}
+        writeln ( '                               PowerFlowAnalyzer                             ' );
+        writeln ( '                                                                             ' );
+        textcolor (7); {gris claro}
+        writeln ( '                                                                             ' );
+        writeln ( '                                                                             ' );
+        writeln ( '                                                                             ' );
+        textcolor (10); {verde claro}
+        writeln ( '                                                                             ' );
+        writeln ( '                     |                                   |                   ' );
+        writeln ( '                     |----------------------------|-- gen 25MW               ' );
+        writeln ( '                     |                            |                          ' );
+        writeln ( '             gen ----|------------------|         |------|                   ' );
+        writeln ( '               10MW                     |         |      |                   ' );
+        writeln ( '                                        |           carga                    ' );
+        writeln ( '                                        |                                    ' );
+        writeln ( '                                      --------------                         ' );
+        writeln ( '                                        |        |                           ' );
+        writeln ( '                                      carga    carga                         ' );
+        writeln ( '                                      80MVA                                  ' );
+        textcolor (white);
+        writeln ( '------------------------------------' );
+        write   ( 'Archivo de DATOS (" ".dat):');
+        textcolor (3); {verde}
+        readln( filename );
+        writeln;
+        assign( inputfile, filename );     iocheck( linenumber);
+                                         if ioerr then goto quit;
+        reset( inputfile );      iocheck( linenumber);
+                               if ioerr then goto quit;
+{ lee titulos y constantes }
+linenumber := 1;
+readln( inputfile, title1 );     iocheck( linenumber);
+                                 if ioerr then goto quit;
+linenumber := linenumber + 1;
+readln( inputfile, title2 );     iocheck( linenumber);
+                                 if ioerr then goto quit;
+linenumber := linenumber + 1;
+readln( inputfile, title3 );     iocheck( linenumber);
+                                 if ioerr then goto quit;
+linenumber := linenumber + 1;
+readln( inputfile, numbuses );   iocheck( linenumber);      {lee numero de buses}
+                                 if ioerr then goto quit;
+linenumber := linenumber + 1;
+readln( inputfile, title4 );     iocheck( linenumber);
+                                 if ioerr then goto quit;
+linenumber := linenumber + 1;
+readln( inputfile, numgen   );   iocheck( linenumber);      {lee numero de generadores}
+                                 if ioerr then goto quit;
+linenumber := linenumber + 1;
+readln( inputfile, title5   );   iocheck( linenumber);
+                                 if ioerr then goto quit;
+linenumber := linenumber + 1;
+readln( inputfile, numlines );   iocheck( linenumber);      {lee numero de lineas}
+                                 if ioerr then goto quit;
+linenumber := linenumber + 1;
+readln( inputfile, title6   );   iocheck( linenumber);
+                                 if ioerr then goto quit;
+linenumber := linenumber + 1;
+readln( inputfile, swingbus  );   iocheck( linenumber);      {lee el bus swing}
+                                 if ioerr then goto quit;
+linenumber := linenumber + 1;
+readln( inputfile, title13   );   iocheck( linenumber);
+                                 if ioerr then goto quit;
+linenumber := linenumber + 1;
+readln( inputfile, potbase  );   iocheck( linenumber);      {lee el potencia base}
+                                 if ioerr then goto quit;
+linenumber := linenumber + 1;
+readln( inputfile, title7   );   iocheck( linenumber);
+                                 if ioerr then goto quit;
+linenumber := linenumber + 1;
+readln( inputfile, title8   );   iocheck( linenumber);
+                                 if ioerr then goto quit;
+{ lee datos del bus }
+    for i := 1 to numbuses do
+        begin
+        linenumber := linenumber + 1;
+        read( inputfile, busno );                   iocheck( linenumber);
+                                                    if ioerr then goto quit;
+        repeat
+        read( inputfile, inputchar );               iocheck( linenumber);
+                                                    if ioerr then goto quit;
+        until inputchar <> ' ';
+        busname[busno] := inputchar;
+        repeat
+        read( inputfile, inputchar );               iocheck( linenumber);
+                                                    if ioerr then goto quit;
+        if inputchar <>' ' then busname[busno] := busname[busno] + inputchar;
+        until inputchar = ' ';
+        read( inputfile, pload[busno] );             iocheck( linenumber);      {lee pload}
+                                                     if ioerr then goto quit;
+        read( inputfile, qload[busno] );             iocheck( linenumber);      {lee qload}
+                                                     if ioerr then goto quit;
+        read( inputfile, volt_low_limit[busno] );   iocheck( linenumber);      {lee limite voltaje bajo}
+                                                     if ioerr then goto quit;
+        read( inputfile, volt_high_limit[busno] ); iocheck( linenumber);      {lee limite voltaje alto}
+                                                     if ioerr then goto quit;
+        read( inputfile, volt_base[busno] );         iocheck( linenumber);      {lee voltaje base}
+                                                     if ioerr then goto quit;
+        readln( inputfile, amp_base[busno] );       iocheck( linenumber);      {lee corriente base}
+                                                     if ioerr then goto quit;
+        end;
+{ lee datos de generadores }
+linenumber := linenumber + 1;
+readln( inputfile, title9   );   iocheck( linenumber);
+                                 if ioerr then goto quit;
+linenumber := linenumber + 1;
+readln( inputfile, title10   );   iocheck( linenumber);
+                                 if ioerr then goto quit;
+    for i := 1 to numgen do
+    begin
+        linenumber := linenumber + 1;
+        read( inputfile, genbusno[i] );             iocheck( linenumber);
+                                                     if ioerr then goto quit;
+        read( inputfile, pgen[i] );                 iocheck( linenumber);
+                                                     if ioerr then goto quit;
+        read( inputfile, vsched[i] );               iocheck( linenumber);
+                                                     if ioerr then goto quit;
+        read( inputfile, qmax[i] );                 iocheck( linenumber);
+                                                     if ioerr then goto quit;
+        readln( inputfile, qmin[i] );               iocheck( linenumber);
+                                                     if ioerr then goto quit;
+    end;
+linenumber := linenumber + 1;
+readln( inputfile, title11   );   iocheck( linenumber);
+                                 if ioerr then goto quit;
+linenumber := linenumber + 1;
+readln( inputfile, title12   );   iocheck( linenumber);
+                                 if ioerr then goto quit;
+{ lee datos de linea }
+    numtran := 0;
+    for i := 1 to numlines do
+    begin
+        linenumber := linenumber + 1;
+        read( inputfile, temp_frombus[i] );       iocheck( linenumber);
+                                                  if ioerr then goto quit;
+        read( inputfile, temp_tobus[i] );         iocheck( linenumber);
+                                                  if ioerr then goto quit;
+        read( inputfile, temp_r[i] );             iocheck( linenumber);
+                                                  if ioerr then goto quit;
+        read( inputfile, temp_x[i] );             iocheck( linenumber);
+                                                  if ioerr then goto quit;
+        read( inputfile, temp_bcap[i] );          iocheck( linenumber);
+    end;
+close (inputfile);
+{ contruye el listado de buses }
+for i := 1 to numbuses do
+      begin
+      p_sched_inj[i] := -pload[i];
+      q_sched_inj[i] := -qload[i];
+      ep[i].m := 1.0;
+      ep[i].a := 0.0;
+      ec[i].r := 1.0;
+      ec[i].i := 0.0;
+      bustype[i] :=  load ;
+      end;
+for i := 1 to numgen do
+      begin
+      busno := genbusno[i];
+      p_sched_inj[busno] := p_sched_inj[busno] + pgen[i];
+      bustype[busno] :=  gen_reg  ;
+      ep[busno].m := vsched[i];
+      ec[busno].r := vsched[i];
+      end;
+bustype[ swingbus ] :=  swing ;
+        textcolor (3); {verde}
+        writeln ( '                                                                             ' );
+        writeln ( '                                                                             ' );
+        textcolor (7); {gris claro}
+        writeln ( '                                                                             ' );
+        writeln ( '                                                                             ' );
+        writeln ( '                                                                             ' );
+        textcolor (10); {verde claro}
+        writeln ( '                                                                             ' );
+        writeln ( '                     | f.p 0.85                   |                          ' );
+        writeln ( '                     |----------------------------|-- gen                    ' );
+        writeln ( '                     |                            |---                       ' );
+        writeln ( '             gen ----|------------------|         |                          ' );
+        writeln ( '                     |      ---         |        carga                       ' );
+        writeln ( '                           I 112.5A     |                                    ' );
+        writeln ( '                                        |                                    ' );
+        writeln ( '                                      --------------                         ' );
+        writeln ( '                                        |        |                           ' );
+        writeln ( '                                   20MW carga    carga                       ' );
+        writeln ( '                                   8MVAR                                     ' );
+        textcolor (9); {azul}
+        writeln ( '/////   ACCESO DE DATOS CORRECTO, se genera MATRIZ de ADMITANCIAS!!!  ' );
+        textcolor (7); {gris claro}
+{construye lineas de tablas de doble orden}
+k := 1;
+for i := 1 to numbuses do
+    begin
+    for j := 1 to numlines do
+        begin
+        if temp_frombus[j] = i then
+            begin
+            frombus[k] := temp_frombus[j];
+            tobus[k] := temp_tobus[j];
+            r[k] := temp_r[j];
+            x[k] := temp_x[j];
+            bcap[k] := temp_bcap[j];
+            tran_pointer[k] := temp_tran_pointer[j];
+            linelimit[k] := temp_linelimit[j];
+            linetype[k] := temp_linetype[j];
+            if buspointer[i] <> 0 then buspointer[i] := k;
+            k := k + 1;
+            end
+        else if temp_tobus[j] = i then
+            begin
+            frombus[k] := temp_tobus[j];
+            tobus[k] := temp_frombus[j];
+            r[k] := temp_r[j];
+            x[k] := temp_x[j];
+            bcap[k] := temp_bcap[j];
+            tran_pointer[k] := temp_tran_pointer[j];
+            linelimit[k] := temp_linelimit[j];
+            linetype[k] := temp_linetype[j];
+            if buspointer[i] <> 0 then buspointer[i] := k;
+            k := k + 1;
+            end;
+        end;
+    end;
+numlines_dbl := k - 1 ;
+{construye la matriz Y}
+    for i := 1 to maxbus do
+            begin
+                for j := 1 to maxbus do
+                begin
+                    y[i,j].r := 0.0;
+                    y[i,j].i := 0.0;
+                end;
+            end;
+for k := 1 to numlines_dbl do if tobus[k] > frombus[k] then
+      begin
+      z := sqr(r[k]) +  sqr(x[k]);
+      gline := r[k] / z;
+      bline := -x[k] / z;
+      i := frombus[k];
+      j := tobus[k];
+      y[i,j].r := y[i,j].r - gline;
+      y[i,j].i := y[i,j].i - bline;
+      y[j,i].r := y[j,i].r - gline;
+      y[j,i].i := y[j,i].i - bline;
+      y[i,i].r := y[i,i].r + gline;
+      y[i,i].i := y[i,i].i + bline + bcap[k];
+      y[j,j].r := y[j,j].r + gline;
+      y[j,j].i := y[j,j].i + bline + bcap[k];
+      end;
+      Begin
+        for i := 1 to numbuses do
+                begin
+                    for j := 1 to numbuses do
+                    begin
+                        GotoXY(j*10,WhereY);
+                        If y[i,j].i = Round(y[i,j].i) Then Write(Round(y[i,j].i)) Else
+                        Write(y[i,j].i:1:2);
+                     end;
+                        WriteLn;
+                end;
+      End;
+quit:
+end;  { final del procedimiento datos de entrada y generacion de la Ybus}
+
+
+
+{----------------------------------------------------------------------------}
+procedure check_gen_vars;
+{checa limite de vars en generadores}
+var
+    busno,i:integer;
+begin
+no_var_limiting:= true;
+for i := 1 to numgen do
+    begin
+    busno := genbusno[i];
+    if bustype[busno] <> swing then
+        begin
+        qgen[i] := q_net_inj[busno] + qload[busno];
+        if qgen[i] > qmax[i] then
+            begin
+            q_sched_inj[busno] := qmax[i] - qload[busno];
+            if bustype[busno] <> gen_highvar then
+                begin
+                no_var_limiting := false;
+                writeln( ' Generador ',i,' en limite max de VARs');
+                bustype[busno] := gen_highvar;
+                end;
+            end
+        else if qgen[i] < qmin[i] then
+            begin
+            q_sched_inj[busno] := qmin[i] - qload[busno];
+            if bustype[busno] <> gen_lowvar then
+                begin
+                no_var_limiting := false;
+                writeln( ' Generador ',i,' en limite min de VARs');
+                bustype[busno] := gen_lowvar;
+                end;
+            end
+        else if ( ( qgen[i] >= qmin[i] ) and ( qgen[i] <= qmax[i] ) ) then
+            begin
+            bustype[busno] := gen_reg;
+            end;
+        end;
+    end;
+end;
+
+
+
+{----------------------------------------------------------------------------}
+procedure calc_net_power;
+  { calcula la potencia neta de todos los buses }
+var
+    i,j:integer;
+begin
+for i:=1 to numbuses do
+  begin
+    cn[i].r := 0.0;
+    cn[i].i := 0.0;
+    for j := 1 to numbuses do
+    begin
+    if i <> j then
+        begin
+        if ( ( abs( y[i,j].r ) <> 0.0 ) or ( abs( y[i,j].i ) <> 0.0)  ) then
+            begin
+            cn[i].r := cn[i].r + ec[j].r * y[i,j].r - ec[j].i * y[i,j].i;
+            cn[i].i := cn[i].i + ec[j].r * y[i,j].i + ec[j].i * y[i,j].r;
+            end;
+        end
+    else if i=j then
+            begin
+            cn[i].r := cn[i].r + ec[i].r * y[i,i].r - ec[i].i * y[i,i].i;
+            cn[i].i := cn[i].i + ec[i].r * y[i,i].i + ec[i].i * y[i,i].r;
+            end;
+    end;
+    p_net_inj[i] := ec[i].r * cn[i].r + ec[i].i * cn[i].i;
+    q_net_inj[i] := ec[i].i * cn[i].r - ec[i].r * cn[i].i;
+  end;
+end;
+
+
+
+{----------------------------------------------------------------------------}
+procedure newton_solution;
+{ soluciona el problema de flujos por newton-raphson }
+label skip;
+var ak, bk,
+    p_max_mismatch, q_max_mismatch ,
+    em2,temp_dpdt, temp_dpde, temp_dqdt, temp_dqde,
+    temp_delp, temp_delq,
+    detd, d11, d12, d21, d22
+    : real;
+    i,j,k : integer;
+begin
+ClrScr;
+iter := 0;
+repeat
+iter := iter + 1;
+p_max_mismatch := 0.0;
+q_max_mismatch := 0.0;
+{ contruye la matriz jacobina, calcula error en los vectores dele y delq }
+for i := 1 to numbuses do
+begin
+cn[i].r := 0.0;
+cn[i].i := 0.0;
+delp[i] := 0.0;
+delq[i] := 0.0;
+dele[i] := 0.0;
+delang[i] := 0.0;
+for j := 1 to numbuses do
+    begin
+    dpdt[i,j] := 0.0;
+    dpde[i,j] := 0.0;
+    dqdt[i,j] := 0.0;
+    dqde[i,j] := 0.0;
+    if i <> j then
+        begin
+        if ( ( abs( y[i,j].r ) <> 0.0 ) or ( abs( y[i,j].i ) <> 0.0)  ) then
+            begin
+            ak := ec[j].r * y[i,j].r - ec[j].i * y[i,j].i;
+            bk := ec[j].r * y[i,j].i + ec[j].i * y[i,j].r;
+            cn[i].r := cn[i].r + ak;
+            cn[i].i := cn[i].i + bk;
+            case bustype[i] of
+                  load, gen_highvar, gen_lowvar  :
+                      begin
+                      case bustype[j] of
+                           load, gen_highvar, gen_lowvar  :
+                               begin
+                               dpdt[i,j] := ak * ec[i].i - bk * ec[i].r;
+                               dpde[i,j] := ak * ec[i].r + bk * ec[i].i;
+                               dqdt[i,j] := -(ak * ec[i].r + bk * ec[i].i);
+                               dqde[i,j] := ak * ec[i].i - bk * ec[i].r;
+                               end;
+                           gen_reg   :
+                               begin
+                               dpdt[i,j] := ak * ec[i].i - bk * ec[i].r;
+                               dqdt[i,j] := -(ak * ec[i].r + bk * ec[i].i);
+                               end;
+                           end;
+                      end;
+                  gen_reg   :
+                      begin
+                      case bustype[j] of
+                           load, gen_highvar, gen_lowvar  :
+                               begin
+                               dpdt[i,j] := ak * ec[i].i - bk * ec[i].r;
+                               dpde[i,j] := ak * ec[i].r + bk * ec[i].i;
+                               end;
+                           gen_reg   :
+                               begin
+                               dpdt[i,j] := ak * ec[i].i - bk * ec[i].r;
+                               end;
+                           end;
+                      end;
+                  end;
+            end;
+        end
+        else if i=j then
+            begin
+            cn[i].r := cn[i].r + ec[i].r * y[i,i].r - ec[i].i * y[i,i].i;
+            cn[i].i := cn[i].i + ec[i].r * y[i,i].i + ec[i].i * y[i,i].r;
+            end;
+    end;  { fla i ahora completa excepto para terminos diagonales, mismatch etc. }
+p_net_inj[i] := ec[i].r * cn[i].r + ec[i].i * cn[i].i;
+q_net_inj[i] := ec[i].i * cn[i].r - ec[i].r * cn[i].i;
+case bustype[i] of
+     load, gen_highvar, gen_lowvar  :
+        begin
+        delp[i] := p_sched_inj[i] - p_net_inj[i];
+        delq[i] := q_sched_inj[i] - q_net_inj[i];
+        if abs( delp[i] ) > p_max_mismatch then
+                    p_max_mismatch := abs( delp[i] );
+        if abs( delq[i] ) > q_max_mismatch then
+                    q_max_mismatch := abs( delq[i] );
+        em2 := ep[i].m * ep[i].m;
+        dpdt[i,i] :=  - q_net_inj[i] - y[i,i].i * em2;
+        dpde[i,i] :=    p_net_inj[i] + y[i,i].r * em2;
+        dqdt[i,i] :=    p_net_inj[i] - y[i,i].r * em2;
+        dqde[i,i] :=    q_net_inj[i] - y[i,i].i * em2;
+        end;
+     gen_reg   :
+        begin
+        delp[i] := p_sched_inj[i] - p_net_inj[i];
+        if abs( delp[i] ) > p_max_mismatch then
+                    p_max_mismatch := abs( delp[i] );
+        em2 := ep[i].m * ep[i].m;
+        dpdt[i,i] :=  - q_net_inj[i] - y[i,i].i * em2;
+        end;
+    end;
+end;
+{hecho el calculo jacobiano, ve si la solucion esta hecha}
+textcolor (Yellow);
+writeln;
+writeln('               NUMERO DE ITERACCIONES PARA LLEGAR A LA SOLUCION! ',iter);
+writeln;
+writeln('                       El maximo error de P es: ',p_max_mismatch:11:4);
+writeln('                       El maximo error de Q es: ',q_max_mismatch:11:4);
+writeln('                               Se resolvio la matriz con el metodo ');
+writeln('                                     de Newton-Raphson         ');
+writeln;
+if ( ( p_max_mismatch < max_mismatch_newton )
+ and ( q_max_mismatch < max_mismatch_newton ) ) then goto skip ;
+ClrScr;
+{el factor jacobiano revisa que actue adelande delp y delq}
+for i := 1 to numbuses do
+begin
+case bustype[i] of
+ load , gen_reg, gen_highvar, gen_lowvar   :
+    begin
+    for j := 1 to numbuses do
+        begin
+        if j = i then     { invierte la diagonal y normaliza la fila }
+            begin
+            case bustype[i] of
+                  load, gen_highvar, gen_lowvar :
+                      begin
+                      detd := dpdt[i,i] * dqde[i,i] - dqdt[i,i] * dpde[i,i];
+                      d11 := dqde[i,i] / detd;
+                      d12 := - dpde[i,i] / detd;
+                      d21 := - dqdt[i,i] / detd;
+                      d22 := dpdt[i,i] / detd;
+                      end;
+                  gen_reg  :
+                      begin
+                      d11 := 1.0 / dpdt[i,i];
+                      d12 := 0.0;
+                      d21 := 0.0;
+                      d22 := 0.0;
+                      end;
+                  end;
+                  temp_delp := d11 * delp[i] + d12 * delq[i];
+                  temp_delq := d21 * delp[i] + d22 * delq[i];
+                  delp[i] := temp_delp;
+                  delq[i] := temp_delq;
+                  for k := i to numbuses do
+                      begin
+                      temp_dpdt := d11 * dpdt[i,k] + d12 * dqdt[i,k];
+                      temp_dpde := d11 * dpde[i,k] + d12 * dqde[i,k];
+                      temp_dqdt := d21 * dpdt[i,k] + d22 * dqdt[i,k];
+                      temp_dqde := d21 * dpde[i,k] + d22 * dqde[i,k];
+                      dpdt[i,k] := temp_dpdt;
+                      dpde[i,k] := temp_dpde;
+                      dqdt[i,k] := temp_dqdt;
+                      dqde[i,k] := temp_dqde;
+                      end;
+            end
+        else if j < i then      { elimina terminos a la izquierda de la diagonal }
+            begin
+            if ( abs(dpdt[i,j]) + abs(dqdt[i,j]) + abs(dqde[i,j])  > 0.0) then
+                begin
+                temp_dpdt := dpdt[i,j];
+                temp_dpde := dpde[i,j];
+                temp_dqdt := dqdt[i,j];
+                temp_dqde := dqde[i,j];
+                delp[i] := delp[i] -
+                               ( temp_dpdt * delp[j] + temp_dpde * delq[j] );
+                delq[i] := delq[i] -
+                               ( temp_dqdt * delp[j] + temp_dqde * delq[j] );
+                for k := j to numbuses do
+                    begin
+                    dpdt[i,k] := dpdt[i,k] -
+                          ( temp_dpdt * dpdt[j,k] + temp_dpde * dqdt[j,k] );
+                    dpde[i,k] := dpde[i,k] -
+                          ( temp_dpdt * dpde[j,k] + temp_dpde * dqde[j,k] );
+                    dqdt[i,k] := dqdt[i,k] -
+                          ( temp_dqdt * dpdt[j,k] + temp_dqde * dqdt[j,k] );
+                    dqde[i,k] := dqde[i,k] -
+                          ( temp_dqdt * dpde[j,k] + temp_dqde * dqde[j,k] );
+                    end;
+                end;
+            end;
+        end;
+    end;
+end;
+end;  {termina de factorizar el jacobiano}
+{calcula dele y delang por sustraccion inversa }
+for i := numbuses downto 1 do
+    begin
+    delang[i] := delp[i] ;
+    dele[i] := delq[i] ;
+    if i < numbuses then
+        begin
+        for j := i+1 to numbuses do
+            begin
+            delang[i] := delang[i] -
+                         ( dpdt[i,j] * delang[j] + dpde[i,j] * dele[j] );
+            dele[i] := dele[i] -
+                         ( dqdt[i,j] * delang[j] + dqde[i,j] * dele[j] );
+            end;
+        end;
+    end;
+{actualiza los voltajes y los angulos de fase para los nuevos valores usando dele y delang}
+for i := 1 to numbuses do
+    begin
+    ep[i].a := ep[i].a + delang[i];
+    ep[i].m := ep[i].m * ( 1.0 + dele[i] );
+    ec[i].r := ep[i].m * cos( ep[i].a );
+    ec[i].i := ep[i].m * sin( ep[i].a );
+    end;
+skip :
+if ( ( p_max_mismatch < 10.0 * max_mismatch_newton )
+     and
+     ( q_max_mismatch < 10.0 * max_mismatch_newton ) )  then check_gen_vars;
+until ( ( iter > maxiter_newton )
+        or
+        (     ( p_max_mismatch < max_mismatch_newton )
+          and ( q_max_mismatch < max_mismatch_newton )
+          and no_var_limiting                 ) );
+end; {termina el procedimiento de flujos newton-raphson}
+
+
+
+{----------------------------------------------------------------------------}
+procedure file_solution;
+{procedimiento para arrojar resultados}
+var
+    i,j,busno,fbus,tbus,bran: integer;
+    soffdia,flow,charging,charging_current,line_current,
+    volt_diff: complex;
+    mva, plosses,qlosses,
+    pgen_total,qgen_total,
+    pload_total,qload_total,
+    total_i2r, total_i2x,total_charging,corriente,factor,
+    line_current_mag, ymag, line_r, line_x, emag_fbus, p_max_mismatch, q_max_mismatch: real;
+    filename:string[25];
+label quit;
+begin { file_solution }
+ClrScr;
+  writeln;
+  textcolor (7); {blanco}  
+  writeln ( '                                                                            ' );
+  writeln ( '                     | f.p 0.85                   |                         ' );
+  writeln ( '                     |----------------------------|-- gen                   ' );
+  writeln ( '                     |                            |---                      ' );
+  writeln ( '             gen ----|------------------|         |                         ' );
+  writeln ( '                     |      ---         |        carga                      ' );
+  writeln ( '                           I 112.5A     |                                   ' );
+  writeln ( '                                        |                                   ' );
+  writeln ( '                                      --------------                        ' );
+  writeln ( '                                        |        |                          ' );
+  writeln ( '                                   20MW carga    carga                      ' );
+  writeln ( '                                   8MVAR                                    ' ); 
+  write('NOMBRE del ARCHIVO(" ".txt): '); 
+  textcolor (3); {verde}
+  readln(filename);
+  writeln;
+  linenumber := 0;
+  assign( outfile, filename );        iocheck( linenumber);
+                                      if ioerr then goto quit;
+
+  rewrite( outfile );                 iocheck( linenumber);
+                                      if ioerr then goto quit;
+  writeln(outfile,'                                                                    ');
+  writeln(outfile,'Numero de iteracciones para llegar a la solucion! ',iter);
+  writeln(outfile,'                                                                    ');
+  writeln(outfile,'file: ',filename );
+  writeln(outfile);
+  writeln(outfile,title1);
+  writeln(outfile,title2);
+  writeln(outfile);
+  writeln(outfile,' Numero de Buses           = ',numbuses );
+  writeln(outfile,' Numero de Lineas          = ',numlines );
+  writeln(outfile,' Numero de Generadores     = ',numgen );
+  writeln(outfile,' Numero de Transformadores = ',numtran );
+  writeln(outfile,' Bus Swing y numero de bus = ',swingbus );
+  writeln(outfile,' potencia base MVA         = ',potbase:8:5 );
+  writeln(outfile);
+  { escribe los datos de entrada de los buses}
+  writeln(outfile);
+  writeln(outfile,'Bus Data');
+  writeln(outfile);
+  writeln(outfile,'Numero  Nombre     Carga        Carga      Voltage      Voltage     Voltaje   corriente   Tipo  ');
+  writeln(outfile,'Bus     Bus        Mw           Mvar      Limite Alto  Limite Bajo  base      base        Bus   ');
+  writeln(outfile,'------  -------  ----------  ----------  -----------  -----------  ---------  ---------  -------');
+  for busno := 1 to numbuses do
+    begin
+    write(outfile,busno:6,'  ');
+    write(outfile,busname[busno],'  ');
+    write(outfile,potbase*pload[busno]:10:5,'  ');
+    write(outfile,potbase*qload[busno]:10:5,'  ');
+    write(outfile,volt_high_limit[busno]:10:5,'  ');
+    write(outfile,volt_low_limit[busno]:10:5,'  ');
+    write(outfile,volt_base[busno]:13:1,'  ');
+    write(outfile,amp_base[busno]:11:1,'  ');
+      case bustype[busno] of
+      load  : writeln(outfile,'CARGA');
+      gen_reg, gen_highvar, gen_lowvar   : writeln(outfile,'GEN');
+      swing : writeln(outfile,'SWING');
+      end;
+  end;
+  { escribe datos de generadores }
+  writeln(outfile);
+  writeln(outfile,'Datos de Generacion ');
+  writeln(outfile);
+  writeln(outfile,'Numero     Mw        Esquema  Limite Alto Limite Bajo     ');
+  writeln(outfile,'Bus     Generacion   Voltaje     Mvar         Mvar        ');
+  writeln(outfile,'------  ----------  ---------  ---------   ---------      ');
+  for i := 1 to numgen do
+    begin
+    write(outfile,genbusno[i]:6,'  ');
+    write(outfile,pgen[i]:10:5,'  ');
+    write(outfile,vsched[i]:9:4,'  ');
+    write(outfile,qmax[i]:9:4,'  ');
+    writeln(outfile,qmin[i]:9:4);
+    end;
+  { escribe datos de las lineas }
+  writeln(outfile);
+  writeln(outfile,'Datos de ramales');
+  writeln(outfile);
+  writeln(outfile,'Desde A      Ramal   Ramal   Carga de   Ramal   ipo de   Tap     Non-Tap    Tap    ');
+  writeln(outfile,'Bus   Bus      R       X     Linea    Lim. Mva   Ramal   Bus       Bus      Ratio  ');
+  writeln(outfile,'----  ----  ------  ------  --------  ---------  ------  -------  ------   -----   ');
+  for i := 1 to numlines_dbl do if frombus[i] < tobus[i] then
+    begin
+    write(outfile,frombus[i]:4,'  ');
+    write(outfile,tobus[i]:4,'  ');
+    write(outfile,r[i]:6:4,'  ');
+    write(outfile,x[i]:6:4,'  ');
+    write(outfile,bcap[i]:8:6,'  ');
+    write(outfile,linelimit[i]:9:4,'    ');
+    write(outfile,linetype[i],'  ');
+    if linetype[i] = 'TRAN' then
+      begin
+      j := tran_pointer[ i ];
+      write(outfile,tapbus[j]:4);
+      write(outfile,nontapbus[j]:7);
+      writeln(outfile,tapratio[j]:6:4);
+      end;
+   writeln(outfile);
+    end;
+    writeln(outfile,'                                                                    ');
+    writeln(outfile,'                                                                    ');
+    writeln(outfile,'ahora se generaran las salidas de la corrida!,  listo!');
+{ calcula potencia p y q    }
+pgen_total := 0.0;
+qgen_total := 0.0;
+for i := 1 to numgen do
+  begin
+  j := genbusno[i];
+  if bustype[j] = swing then
+    begin
+    pgen[i] :=  p_net_inj[j] + pload[j];
+    qgen[i] :=  q_net_inj[j] + qload[j];
+   end
+  else
+    begin
+    qgen[i] := q_net_inj[j] + qload[j];
+    end;
+    pgen_total := pgen_total + pgen[i];
+    qgen_total := qgen_total + qgen[i];
+    end;
+pload_total := 0.0;
+qload_total := 0.0;
+for i := 1 to numbuses do
+    begin
+    pload_total := pload_total + pload[i];
+    qload_total := qload_total + qload[i];
+    end;
+total_i2r := 0.0;
+total_i2x := 0.0;
+total_charging := 0.0;
+{escribe los datos de la admitancia de red}
+  writeln(outfile);
+  writeln(outfile,'Los elementos de la matrix Y son:');
+  writeln(outfile);
+  begin
+  for i := 1 to numbuses do
+    for j := 1 to numbuses do
+  writeln(outfile,'y(',i:2,',',j:2,') = (',y[i,j].r:8:4,') + j(',y[i,j].i:8:4,')');
+  end;
+  writeln(outfile);
+  { escribe la solucion }
+  writeln(outfile);
+  writeln(outfile,'Solucion de Flujo de Potencia:');
+  writeln(outfile);
+  writeln(outfile,'file: ',filename );
+  writeln(outfile);
+  writeln(outfile,title1);
+  writeln(outfile,title2);
+  writeln(outfile);
+  writeln(outfile,'Desde Volt.  Volt.  Volt.     Mw      Mvar   Mw    Mvar    A     Mw      Mvar      I             Mva     ');
+  writeln(outfile,'Bus    PU    Ang.    Kv     Carga    Carga   Gen.   Gen.   Bus   Flujo   Flujo    Amp    f.p.    Flujo   ');
+  writeln(outfile,'---- ------ ------ -------- ------- ------- ------- ------- ---- ------- ------- ------- ------- ------- ');
+  fbus := 0;
+  for bran := 1 to numlines_dbl do
+    begin
+    if fbus <> frombus[bran] then
+      begin
+  {comienza en bus de llegada}
+      fbus := frombus[bran];
+      writeln(outfile);
+      write(outfile,fbus:4,' ');
+      write(outfile,ep[fbus].m:6:4,' ');
+      write(outfile,dpr*ep[fbus].a:6:3,' ');
+      write(outfile,0.001*volt_base[fbus]*ep[fbus].m:8:1,' ');
+      write(outfile,potbase*pload[fbus]:7:2,' ');
+      write(outfile,potbase*qload[fbus]:7:2,' ');
+      if bustype[fbus] in [gen_reg,gen_highvar,gen_lowvar,swing] then
+        begin
+        i:=1;
+        while genbusno[i]<>fbus do i:=i+1;
+        write(outfile,potbase*pgen[i]:7:2,' ');
+        write(outfile,potbase*qgen[i]:7:2,' ');
+        end;
+      writeln(outfile);
+      end;
+   { termina en bus de salida}
+    tbus := tobus[bran];
+    for i:=1 to 60 do write(outfile,' ');
+    write(outfile,tbus:4,' ');
+    {                                                       }
+    { calcula el flujo de cada rama del fbus to tbus        }
+    {                                                       }
+    csub(volt_diff,ec[fbus],ec[tbus]);       {llamado, realiza la resta del bus [fbus] a [tbus]}
+    cmult(line_current,volt_diff,y[fbus,tbus]); {llamado}
+    if ( fbus < tbus ) then
+        begin
+        cmag( line_current_mag, line_current ); {llamado}
+        cmag( ymag, y[fbus,tbus] );             {llamado}
+        line_r := -y[fbus,tbus].r / ( sqr(ymag));
+        line_x :=  y[fbus,tbus].i / ( sqr(ymag));
+        total_i2r := total_i2r + line_r * sqr(line_current_mag);
+        total_i2x := total_i2x + line_x * sqr(line_current_mag);
+        end;
+    cmag( emag_fbus, ec[fbus] );             {llamado}
+    total_charging := total_charging + bcap[bran] * sqr(emag_fbus);
+    charging.r := 0.0;
+    charging.i := bcap[bran];
+    cmult(charging_current,ec[fbus],charging);         {         }
+    csub(line_current,charging_current,line_current);    { llamados }
+    conj(line_current,line_current);                     {         }
+    cmag(corriente,line_current);             {llamado, aqui se extrae la corriente de linea, calculando el modulo}
+    cmult(flow,line_current,ec[fbus]);        {llamado para calcular flujo flow}
+    mva := sqrt(sqr(flow.r) + sqr(flow.i));     {calcula modulo de potencia de cada bus}
+    factor_potencia(factor,mva,flow.r);         {llamado}
+    {                             }
+    { escribe por bus el factor y los flujos (p,q)}
+    {                             }
+    write(outfile,potbase*flow.r:7:2,' ');
+    write(outfile,potbase*flow.i:7:2,' ');
+    write(outfile,amp_base[fbus]*corriente:7:2,' '); {calculo corriente p.u. y corriente base}
+    write(outfile,factor:7:2,' ');
+    writeln(outfile,potbase*mva:7:2);
+  end;
+writeln(outfile);
+writeln(outfile);
+writeln(outfile, '  Mw generacion                 = ',potbase*pgen_total:7:2);
+writeln(outfile, '  Mvar generacion               = ',potbase*qgen_total:7:2);
+writeln(outfile, '  Mw Carga                      = ',potbase*pload_total:7:2);
+writeln(outfile, '  Mvar Carga                    = ',potbase*qload_total:7:2);
+writeln(outfile, '  Total I2R Mw perdidas         = ',potbase*total_i2r:7:2);
+writeln(outfile, '  Total I2X Mvar perdidas       = ',potbase*total_i2x:7:2);
+writeln(outfile, '  Total de carga en Mvar        = ',potbase*total_charging:7:2);
+close(outfile);
+quit:
+end;  { termina procedimiento solucion }
+{----------------------------------------------------------------------------}
+{<f> <s>    procedimiento de entrada de valor numerico}
+procedure numinput(var value:real);
+{Esta rutina maneja la entrada de números reales por teclado.}
+var
+    number_string : string[20];
+    code, i, remainder : integer;
+    input_string : string[20];
+    decimal_found : boolean ;
+label terminate;
+begin
+for i:= 1 to 20 do input_string[i] := ' '; decimal_found := false;
+readln( input_string );
+{
+si la cadena tiene longitud cero,
+el usuario simplemente presiona la tecla Enter, establece el resultado en 0.0 y regresa
+}
+if length( input_string ) = 0 then
+          begin
+          number_string := '0.0';
+          goto terminate
+          end;
+i := 0;        { Encuentra el primer carácter que no esté en blanco }
+remainder := length( input_string );
+repeat
+i := i + 1;
+remainder := remainder - 1;
+until ( input_string[i] <> ' ') or ( remainder = 0 );
+{
+Si el último carácter de la cadena está en blanco, el campo estaba en blanco
+Establezca la cadena en 0.0
+}
+if input_string[i] = ' ' then
+          begin
+          number_string := '0.0';
+          goto terminate
+          end;
+{Si el resto = 0 el usuario ingresó solo un número}
+if remainder = 0 then
+          begin
+          number_string := input_string + '.0';
+          goto terminate
+          end;
+{ Coloque un cero a la izquierda del número, detrás del signo menos si el número es negativo }
+if input_string[i] = '-' then number_string := '-0'
+                       else number_string := '0' + input_string[i]; if
+input_string[i] = '.' then decimal_found := true;
+{ Copiar número a matriz de cadenas de números }
+repeat
+i := i + 1;
+if input_string[i] <>' ' then
+    begin
+    number_string := number_string + input_string[i];
+    if input_string[i] = '.' then decimal_found := true
+    end;
+until i = length( input_string );
+{Verifique la presencia del punto decimal; si no hay ninguno, agregue uno; de lo contrario, agregue un cero}
+if decimal_found then number_string := number_string + '0'
+                 else number_string := number_string + '.0';
+terminate:
+val(number_string, value, code);    {llamado, donde esta la subrutina?}
+end; { End numinput procedure }
+
+{----------------------------------------------------------------------------}
+procedure change_case;
+
+  var
+    i,busno:integer;
+
+      {----------------------------------------------------------------------------}
+      {aqui se añaden subrutinas dentro de una subrutina}
+      procedure change_system_load;
+
+      var
+      i : integer;
+      total_load, new_load : real;
+      begin
+      ClrScr;
+      total_load := 0.0;
+      for i := 1 to numbuses do
+      total_load := total_load + pload[i];
+      writeln( ' Total presente de MW en el sistema = ',100.0*total_load:7:2 );
+      writeln;
+      write(   'Introduce nuevo total de Carga en MW: '); numinput(new_load); { llamado }
+      new_load := new_load / 100.0 ;
+      for i := 1 to numbuses do
+        begin
+      pload[i] := pload[i] * new_load / total_load;
+      qload[i] := qload[i] * new_load / total_load;
+        end;
+      end;
+      {--------------------------------------------------------------------------------------}
+      procedure change_gen_volts;
+      var
+      busno,i : integer;
+      newvolt : real;
+      begin
+      ClrScr;
+      repeat
+      writeln( ' Los valores presentes de voltaje son : ');
+      writeln( ' para terminar introducir 0'           );
+      writeln( ' ' );
+      writeln( ' ' );
+      for i := 1 to numgen do
+      writeln('Generador Bus ',genbusno[i]:3,'Voltaje esquema. P.U.= ',
+               vsched[i]:5:3 );
+      write ('Introduce conexion bus generador');
+      write ('__nuevo esquema de voltajes en PU: ');
+      write (''); read( busno ); numinput( newvolt );{ llamado }
+      if busno <> 0 then
+        begin
+        for i := 1 to numgen do
+      if genbusno[i] = busno then
+        vsched[i] := newvolt;
+        end;
+      until busno = 0;
+      end;
+      {---------------------------------------------------------------------------------------}
+      procedure change_gen_mw;
+
+      var
+      busno,i : integer;
+      newmw : real;
+      begin;
+      ClrScr;
+      repeat
+      writeln( ' Los esquemas en MW de los generadores son: ');
+      writeln( ' para terminar introducir 0'                 );
+      writeln( ' ' );
+      writeln( ' ' );
+      for i := 1 to numgen do
+            writeln('  Generador bus ',genbusno[i]:2,' Esquema MW = ',
+                 100.0*pgen[i]:7:2 );
+      write  ('Introduce conexion bus generador,__, nuevo esquema MW: ');
+      write  (''); read( busno ); numinput( newmw );{ llamado }
+          if busno <> 0 then
+      begin
+      for i := 1 to numgen do
+          if genbusno[i] = busno then
+      pgen[i] := newmw / 100.0 ;
+      end;
+      until busno = 0;
+      end;
+      {---------------------------------------------------------------------------}
+begin;
+ClrScr;
+repeat
+    writeln;
+    writeln(' Cambiar datos de entrada:');
+    writeln;
+    writeln('1 - Cambiar sistema de carga');
+    writeln('2 - Cambiar esquema de voltajes de generadores  ');
+    writeln('3 - Cambiar esquema de carga (MW) de generadores');
+    writeln('4 - Retornar al menu principal                 ');
+    writeln;
+    write('Enter option >');
+    readln(i);
+    if i in [1,2,3] then
+      case i of
+      1 : change_system_load;
+      2 : change_gen_volts;
+      3 : change_gen_mw;
+      end;
+  until i = 4;
+ClrScr;
+
+{reconstruir lista de buses}
+
+for i := 1 to numbuses do
+      begin
+      p_sched_inj[i] := -pload[i];
+      q_sched_inj[i] := -qload[i];
+      ep[i].m := 1.0;
+      ep[i].a := 0.0;
+      ec[i].r := 1.0;
+      ec[i].i := 0.0;
+      bustype[i] :=  load ;
+      end;
+
+for i := 1 to numgen do
+      begin
+      busno := genbusno[i];
+      p_sched_inj[busno] := p_sched_inj[busno] + pgen[i];
+      bustype[busno] :=  gen_reg  ;
+      ep[busno].m := vsched[i];
+      ec[busno].r := vsched[i];
+      end;
+
+bustype[ swingbus ] :=  swing ;
+end;
+{----------------------------------------------------------------------------}
+{programa principal PFA}
+  begin;
+ClrScr;
+  zero.r:=0.0;
+  zero.i:=0.0;
+
+  datainput;
+
+repeat
+    textcolor (white);
+    writeln;
+    writeln(' Menu de optciones:');
+    writeln;
+    writeln('1 - Resolver flujos de Potencia por Newton-Raphson');
+    writeln('2 - Cambiar datos de entrada');
+    writeln('3 - Generar archivo de salida de las corridas');
+    writeln('4 - Retornar a un nuevo caso');
+    writeln('5 - Salir');
+    writeln;
+    write('Elige opcion >');
+    readln(i);
+    if i in [1..5] then
+      case i of
+      1 : newton_solution;
+      2 : change_case;
+      3 : file_solution;
+      4 : datainput;
+      end;
+  until i = 5;
+ClrScr;
+
+END;
+
+(******************************************************************************)
+(* *)
+(* MODULO 5: CALCULADORA DE BANCO DE CAPACITORES                              *)
+(* *)
+(******************************************************************************)
+PROCEDURE Run_PowerFactorCorrector;
+
+TYPE
+    TCalculoFP = RECORD
+        DescripcionSistema : STRING[50];
+        PotenciaActiva     : REAL; // En kW
+        FP_Inicial         : REAL;
+        FP_Corregido       : REAL;
+        PotenciaReactiva   : REAL; // En kVAr
+    END;
+
+VAR
+    Casos: ARRAY[1..MAX_CASOS_FP] OF TCalculoFP;
+    ContadorCasos: INTEGER;
+    Opcion: CHAR;
+    NombreArchivo: STRING[20];
+
+    FUNCTION TanDelArcCos(fp: REAL): REAL;
+    BEGIN
+        IF (fp > 0) AND (fp < 1) THEN
+            TanDelArcCos := Sqrt(1 - Sqr(fp)) / fp  (* CORREGIDO: System.Sqrt -> Sqrt *)
+        ELSE
+            TanDelArcCos := 0;
+    END;
+
+    PROCEDURE RealizarCalculo;
+    VAR
+        NuevoCalculo: TCalculoFP;
+        tanInicial, tanFinal: REAL;
+    BEGIN
+        ClrScr;
+        DrawHeader('Calculo de Correccion de Factor de Potencia', Yellow, LightBlue);
+        Write('Descripcion del sistema (e.g., Motor 1): '); Readln(NuevoCalculo.DescripcionSistema);
+        Write('Potencia Activa (P) en kW: '); Readln(NuevoCalculo.PotenciaActiva);
+        Write('Factor de Potencia Inicial (cos φ1) [e.g., 0.85]: '); Readln(NuevoCalculo.FP_Inicial);
+        Write('Factor de Potencia Deseado (cos φ2) [e.g., 0.95]: '); Readln(NuevoCalculo.FP_Corregido);
+
+        IF (NuevoCalculo.FP_Inicial >= NuevoCalculo.FP_Corregido) OR
+           (NuevoCalculo.FP_Inicial <= 0) OR (NuevoCalculo.FP_Inicial > 1) OR
+           (NuevoCalculo.FP_Corregido <= 0) OR (NuevoCalculo.FP_Corregido > 1) THEN
+        BEGIN
+            TextColor(Red);
+            WriteLn;
+            WriteLn('Error: Los valores del factor de potencia no son validos.');
+            WriteLn('Asegurese de que 0 < FP Inicial < FP Corregido <= 1.');
+            ReadKey;
+            EXIT;
+        END;
+
+        tanInicial := TanDelArcCos(NuevoCalculo.FP_Inicial);
+        tanFinal   := TanDelArcCos(NuevoCalculo.FP_Corregido);
+        NuevoCalculo.PotenciaReactiva := NuevoCalculo.PotenciaActiva * (tanInicial - tanFinal);
+
+        TextColor(Green);
+        WriteLn;
+        WriteLn('------------------ RESULTADO DEL CALCULO ------------------');
+        TextColor(White);
+        WriteLn('Potencia Reactiva del capacitor a instalar (Qc): ', NuevoCalculo.PotenciaReactiva:0:2, ' kVAr');
+        TextColor(Green);
+        WriteLn('-----------------------------------------------------------');
+
+        IF ContadorCasos < MAX_CASOS_FP THEN
+        BEGIN
+            Inc(ContadorCasos);
+            Casos[ContadorCasos] := NuevoCalculo;
+            TextColor(Cyan);
+            WriteLn('>>> Calculo almacenado en memoria (Caso #', ContadorCasos, ').');
+        END ELSE WriteLn('>>> La lista de casos esta llena. No se pudo almacenar.');
+
+        TextColor(Yellow); WriteLn;
+        Write('Presione cualquier tecla para continuar...');
+        ReadKey;
+    END;
+
+    PROCEDURE MostrarCasos;
+    VAR i: INTEGER;
+    BEGIN
+        ClrScr;
+        DrawHeader('Casos de Correccion Almacenados', Yellow, LightBlue);
+        IF ContadorCasos = 0 THEN
+            WriteLn('No hay casos almacenados en la memoria.')
+        ELSE
+            FOR i := 1 TO ContadorCasos DO
+            BEGIN
+                TextColor(LightGreen);
+                WriteLn('-------------------- CASO #', i, ' --------------------');
+                TextColor(White);
+                WriteLn(' Descripcion: ', Casos[i].DescripcionSistema);
+                WriteLn(' Potencia Activa (P): ', Casos[i].PotenciaActiva:0:2, ' kW');
+                WriteLn(' FP Inicial: ', Casos[i].FP_Inicial:0:2, ' -> FP Corregido: ', Casos[i].FP_Corregido:0:2);
+                TextColor(Yellow);
+                WriteLn(' Capacitor Requerido (Qc): ', Casos[i].PotenciaReactiva:0:2, ' kVAr');
+                WriteLn;
+            END;
+        TextColor(Yellow);
+        Write('Presione cualquier tecla para continuar...');
+        ReadKey;
+    END;
+
+    PROCEDURE GenerarArchivo;
+    VAR Archivo: TEXT; i: INTEGER;
+    BEGIN
+        ClrScr;
+        DrawHeader('Generacion de Archivo de Reporte', Yellow, LightBlue);
+        IF ContadorCasos = 0 THEN
+        BEGIN
+            TextColor(Red);
+            WriteLn('No hay casos para guardar en el archivo.');
+        END
+        ELSE
+        BEGIN
+            Assign(Archivo, NombreArchivo);
+            Rewrite(Archivo);
+            Writeln(Archivo, '****************************************************');
+            Writeln(Archivo, '* REPORTE DE CORRECCION DE FACTOR DE POTENCIA    *');
+            Writeln(Archivo, '****************************************************');
+            Writeln(Archivo);
+            FOR i := 1 TO ContadorCasos DO
+            BEGIN
+                Writeln(Archivo, '-------------------- CASO #', i, ' --------------------');
+                Writeln(Archivo, ' Descripcion del Sistema   : ', Casos[i].DescripcionSistema);
+                Writeln(Archivo, ' Potencia Activa (P)       : ', Casos[i].PotenciaActiva:0:2, ' kW');
+                Writeln(Archivo, ' Factor de Potencia Inicial : ', Casos[i].FP_Inicial:0:2);
+                Writeln(Archivo, ' Factor de Potencia Corregido: ', Casos[i].FP_Corregido:0:2);
+                Writeln(Archivo, ' Capacitor Requerido (Qc)  : ', Casos[i].PotenciaReactiva:0:2, ' kVAr');
+                Writeln(Archivo, '-------------------------------------------------');
+                Writeln(Archivo);
+            END;
+            Close(Archivo);
+            TextColor(Green);
+            WriteLn('Se ha generado el archivo "', NombreArchivo, '" con ', ContadorCasos, ' casos.');
+            WriteLn('Este archivo esta listo para ser impreso.');
+        END;
+        TextColor(Yellow);
+        WriteLn; Write('Presione cualquier tecla para continuar...');
+        ReadKey;
+    END;
+
+BEGIN // Flujo principal de Run_PowerFactorCorrector
+    ContadorCasos := 0;
+    NombreArchivo := 'ResCapacitor.TXT';
+    REPEAT
+        ClrScr;
+        DrawHeader('Correccion de Factor de Potencia', Yellow, LightBlue);
+        WriteLn('1. Realizar un nuevo calculo');
+        WriteLn('2. Ver todos los casos almacenados');
+        WriteLn('3. Generar archivo de reporte');
+        WriteLn('S. Salir al Menu Principal');
+        WriteLn;
+        TextColor(Cyan);
+        Write('Seleccione una opcion: ');
+        Opcion := UpCase(ReadKey);
+        WriteLn(Opcion);
+
+        CASE Opcion OF
+            '1': RealizarCalculo;
+            '2': MostrarCasos;
+            '3': GenerarArchivo;
+        END;
+    UNTIL Opcion = 'S';
+END;
+
+
+(******************************************************************************)
+(* *)
+(* PANTALLAS PRINCIPALES Y MENU                                               *)
+(* *)
+(******************************************************************************)
+
+PROCEDURE ShowSplashScreen;
+VAR
+    i: integer;
+BEGIN
+    TextBackground(Black);
+    ClrScr;
+
+    // --- Dibuja la Torre de Transmisión ---
+    TextColor(LightGray);
+    // Parte superior
+    GoToXY(39, 4); Write(#220); 
+    GoToXY(38, 5); Write(#219, #219, #219); 
+    GoToXY(37, 6); Write(#219, ' V ', #219);
+    GoToXY(36, 7); Write('<', #223, #223, #223, #223, #223, '>'); 
+    // Brazos
+    GoToXY(30, 8); Write('---o---');
+    GoToXY(43, 8); Write('---o---');
+    GoToXY(29, 9); Write('----o----');
+    GoToXY(42, 9); Write('----o----');
+    // Cuerpo de la torre
+    GoToXY(37, 8); Write('/'); GoToXY(41, 8); Write('\');
+    GoToXY(36, 9); Write('/');  GoToXY(42, 9); Write('\');
+    GoToXY(36, 10); Write('X'); GoToXY(42, 10); Write('X');
+    GoToXY(35, 11); Write('/'); GoToXY(43, 11); Write('\');
+    GoToXY(34, 12); Write('/'); GoToXY(44, 12); Write('\');
+    GoToXY(33, 13); Write('/'); GoToXY(45, 13); Write('\');
+    GoToXY(32, 14); Write('/'); GoToXY(46, 14); Write('\');
+    GoToXY(31, 15); Write('/'); GoToXY(47, 15); Write('\');
+    // Base
+    GoToXY(30, 16); Write('/'); GoToXY(48, 16); Write('\');
+    GoToXY(29, 17); Write('/'); GoToXY(49, 17); Write('\');
+    GoToXY(28, 18); Write('----'); GoToXY(48, 18); Write('----');
+
+    // --- Texto del Título ---
+    TextColor(White);
+    GoToXY(22, 2); Write('** ANALIZADOR DE SISTEMAS ELECTRICOS DE POTENCIA **');
+    TextColor(Yellow);
+    GoToXY(34, 20); Write('Version 2.0');
+
+    Delay(2000); // Pausa para ver la escena inicial
+
+    // --- Animación del Rayo ---
+    // Nubes
+    TextColor(white);
+    GoToXY(5, 3); Write('~~~~~');
+    GoToXY(60, 2); Write('~~~~~');
+    TextColor(White);
+    GoToXY(7, 4); Write('*****');
+    GoToXY(62, 3); Write('*****');
+
+
+    // Sonido del trueno
+    Sound(100);
+    Delay(100);
+    NoSound;
+
+    // Rayo secuencia
+    TextColor(blue);
+    GoToXY(45, 4); Write('\'); Delay(30);
+    GoToXY(44, 5); Write('/'); Delay(30);
+    GoToXY(45, 6); Write('\'); Delay(30);
+    GoToXY(43, 7); Write('|'); Delay(30);
+    GoToXY(42, 8); Write('/'); Delay(30);
+    GoToXY(41, 9); Write('|'); Delay(30);
+    GoToXY(40, 10); Write('/'); Delay(30);
+    GoToXY(39, 11); Write('|');
+
+    // --- Efecto de Flash ---
+    Sound(800);
+    for i := 1 to 3 do
+    begin
+        TextBackground(White); ClrScr;
+        Delay(40);
+        TextBackground(Blue); ClrScr;
+        Delay(40);
+    end;
+    NoSound;
+
+
+    // --- Redibujar la escena y mostrar texto final ---
+    TextBackground(Black);
+    TextColor(White);
+    ClrScr;
+    GoToXY(22, 2); Write('** ANALIZADOR DE SISTEMAS ELECTRICOS DE POTENCIA **');
+    TextColor(Yellow);
+    GoToXY(34, 20); Write('Version 2.0');
+
+    // --- ReDibuja la Torre de Transmisión ---
+    TextColor(LightGray);
+    // Parte superior
+    GoToXY(39, 4); Write(#220); 
+    GoToXY(38, 5); Write(#219, #219, #219); 
+    GoToXY(37, 6); Write(#219, ' V ', #219);
+    GoToXY(36, 7); Write('<', #223, #223, #223, #223, #223, '>'); 
+    // Brazos
+    GoToXY(30, 8); Write('---o---');
+    GoToXY(43, 8); Write('---o---');
+    GoToXY(29, 9); Write('----o----');
+    GoToXY(42, 9); Write('----o----');
+    // Cuerpo de la torre
+    GoToXY(37, 8); Write('/'); GoToXY(41, 8); Write('\');
+    GoToXY(36, 9); Write('/');  GoToXY(42, 9); Write('\');
+    GoToXY(36, 10); Write('X'); GoToXY(42, 10); Write('X');
+    GoToXY(35, 11); Write('/'); GoToXY(43, 11); Write('\');
+    GoToXY(34, 12); Write('/'); GoToXY(44, 12); Write('\');
+    GoToXY(33, 13); Write('/'); GoToXY(45, 13); Write('\');
+    GoToXY(32, 14); Write('/'); GoToXY(46, 14); Write('\');
+    GoToXY(31, 15); Write('/'); GoToXY(47, 15); Write('\');
+    // Base
+    GoToXY(30, 16); Write('/'); GoToXY(48, 16); Write('\');
+    GoToXY(29, 17); Write('/'); GoToXY(49, 17); Write('\');
+    GoToXY(28, 18); Write('----'); GoToXY(48, 18); Write('----');
+
+
+    // Mensaje de carga
+    for i := 1 to 2 do
+    begin
+        TextColor(White);
+        GoToXY(30, 23); Write('C A R G A N D O   S U I T E...');
+        Delay(400);
+        TextColor(Yellow);
+        GoToXY(30, 23); Write('C A R G A N D O   S U I T E...');
+        Delay(400);
+    end;
+
+END;
+
+PROCEDURE ShowMainMenu(VAR Choice: Char);
+BEGIN
+    TextBackground(Black);
+    TextColor(White);
+    ClrScr;
+
+    DrawBox(10, 3, 72, 22, LightBlue);
+    TextColor(Yellow);
+    GoToXY(12, 5); Write('S U I T E   D E   A N A L I S I S   D E   P O T E N C I A');
+    DrawBox(11, 4, 71, 6, LightBlue);
+
+    TextColor(White);
+    GoToXY(15, 9);  Write('[1] -> Calculadora de Impedancias en Por Unidad (p.u.)');
+    GoToXY(15, 11); Write('[2] -> Calculadora de Numeros Complejos');
+    GoToXY(15, 13); Write('[3] -> Analizador de Cortocircuito Trifasico');
+    GoToXY(15, 15); Write('[4] -> Analizador de Flujo de Potencia');
+    GoToXY(15, 17); Write('[5] -> Correccion de Factor de Potencia (Capacitores)');
+
+    TextColor(LightRed);
+    GoToXY(15, 19); Write('[S] -> Salir del Programa');
+
+    TextColor(Cyan);
+    GoToXY(25, 21); Write('Seleccione el modulo a ejecutar: ');
+    Choice := UpCase(ReadKey);
+END;
+
+(******************************************************************************)
+(* *)
+(* PROGRAMA PRINCIPAL                                                         *)
+(* *)
+(******************************************************************************)
+VAR
+    OpcionPrincipal: Char;
+BEGIN
+    ShowSplashScreen;
+
+    REPEAT
+        ShowMainMenu(OpcionPrincipal);
+        CASE OpcionPrincipal OF
+            '1': Run_PerUnitCalculator;
+            '2': Run_ComplexCalculator;
+            '3': Run_ShortCircuitAnalyzer;
+            '4': Run_PowerFlowAnalyzer;
+            '5': Run_PowerFactorCorrector;
+            'S': WriteLn; // Salir
+            ELSE
+            BEGIN
+                TextColor(Red);
+                GoToXY(20, 23); Write('Opcion no valida. Presione una tecla.');
+                ReadKey;
+                GoToXY(20, 23); ClrEol;
+            END;
+        END;
+    UNTIL OpcionPrincipal = 'S';
+
+    TextBackground(Black);
+    TextColor(LightGray);
+    ClrScr;
+    GoToXY(28, 12); WriteLn('Fin del programa. Gracias.');
+    ReadKey;
+END.
